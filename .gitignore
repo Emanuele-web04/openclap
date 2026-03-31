@@ -4,3 +4,7 @@ __pycache__/
 .DS_Store
 models/
 *.log
+build/
+dist/
+assets/*.icns
+assets/*.iconset/

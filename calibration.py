@@ -221,6 +221,8 @@ def build_calibration_profile(
     band_ratio = percentile([update.band_ratio for update in clap_updates], 25.0, 1.3)
     high_band_share = percentile([update.high_band_share for update in clap_updates], 25.0, 0.24)
     spectral_flatness = percentile([update.spectral_flatness for update in clap_updates], 25.0, 0.18)
+    zero_crossing_rate = percentile([update.zero_crossing_rate for update in clap_updates], 25.0, 0.35)
+    spectral_centroid = percentile([update.spectral_centroid for update in clap_updates], 25.0, 3000.0)
 
     peak_min = percentile([update.peak for update in clap_updates], 15.0, clap_peak)
     peak_median = percentile([update.peak for update in clap_updates], 50.0, clap_peak)
@@ -253,6 +255,8 @@ def build_calibration_profile(
         band_ratio=band_ratio,
         high_band_share=high_band_share,
         spectral_flatness=spectral_flatness,
+        zero_crossing_rate=zero_crossing_rate,
+        spectral_centroid=spectral_centroid,
         observed_gap_seconds=observed_gap_seconds,
         peak_min=peak_min,
         peak_median=peak_median,

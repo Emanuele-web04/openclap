@@ -6,13 +6,23 @@ Depends on: unittest, tempfile, app_paths.py, config.py
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from app_paths import AppPaths
 from clap_detector import ClapCalibrationProfile
-from config import load_config, save_config, set_armed, set_input_device, set_sensitivity_preset
+from config import (
+    clear_target_app,
+    load_config,
+    save_config,
+    set_armed,
+    set_input_device,
+    set_sensitivity_preset,
+    set_target_app,
+)
 
 
 class ConfigTests(unittest.TestCase):
@@ -32,7 +42,8 @@ class ConfigTests(unittest.TestCase):
 
             self.assertTrue(paths.config_path.exists())
             self.assertTrue(config.service.armed)
-            self.assertEqual(config.actions.codex_url, "codex://")
+            self.assertEqual(config.actions.target_app_path, "")
+            self.assertEqual(config.actions.target_app_name, "")
 
     def test_save_and_reload_round_trip(self) -> None:
         """Persisted values should survive a save/load cycle."""
@@ -40,6 +51,8 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             paths = self.make_paths(temp_dir)
             config = load_config(paths)
+            config.actions.target_app_path = "/Applications/Notion.app"
+            config.actions.target_app_name = "Notion"
             config.actions.local_audio_file = "/tmp/test-song.mp3"
             config.service.input_device_name = "MacBook Pro Microphone"
             config.service.sensitivity_preset = "strict"
@@ -61,6 +74,8 @@ class ConfigTests(unittest.TestCase):
             save_config(paths, config)
 
             reloaded = load_config(paths)
+            self.assertEqual(reloaded.actions.target_app_path, "/Applications/Notion.app")
+            self.assertEqual(reloaded.actions.target_app_name, "Notion")
             self.assertEqual(reloaded.actions.local_audio_file, "/tmp/test-song.mp3")
             self.assertEqual(reloaded.service.input_device_name, "MacBook Pro Microphone")
             self.assertEqual(reloaded.service.sensitivity_preset, "strict")
@@ -74,12 +89,41 @@ class ConfigTests(unittest.TestCase):
             paths = self.make_paths(temp_dir)
             set_armed(paths, False)
             set_input_device(paths, "USB Mic")
-            set_sensitivity_preset(paths, "sensitive")
+            set_sensitivity_preset(paths, "responsive")
+            set_target_app(paths, "/Applications/Finder.app")
+            clear_target_app(paths)
 
             updated = load_config(paths)
             self.assertFalse(updated.service.armed)
             self.assertEqual(updated.service.input_device_name, "USB Mic")
-            self.assertEqual(updated.service.sensitivity_preset, "sensitive")
+            self.assertEqual(updated.service.sensitivity_preset, "responsive")
+            self.assertEqual(updated.actions.target_app_path, "")
+            self.assertEqual(updated.actions.target_app_name, "")
+
+    def test_legacy_codex_config_migrates_to_target_app(self) -> None:
+        """Older configs without target_app fields should seed Codex when available."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = self.make_paths(temp_dir)
+            paths.config_path.parent.mkdir(parents=True, exist_ok=True)
+            paths.config_path.write_text(
+                json.dumps(
+                    {
+                        "service": {"armed": True},
+                        "detector": {},
+                        "actions": {"local_audio_file": ""},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            legacy_codex_app = Path(temp_dir) / "Codex.app"
+            legacy_codex_app.mkdir()
+            with patch("config.LEGACY_DEFAULT_TARGET_APP_PATH", legacy_codex_app):
+                migrated = load_config(paths)
+
+            self.assertEqual(migrated.actions.target_app_path, str(legacy_codex_app))
+            self.assertEqual(migrated.actions.target_app_name, "Codex")
 
 
 if __name__ == "__main__":

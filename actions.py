@@ -1,7 +1,7 @@
 """
 FILE: actions.py
 Purpose: Executes trigger actions off the hot audio loop through a small worker
-queue so Codex launch and media playback never block clap detection.
+queue so app launches and media playback never block clap detection.
 Depends on: config.py for action settings plus Python stdlib only.
 """
 
@@ -13,14 +13,13 @@ from pathlib import Path
 import queue
 import subprocess
 import threading
-from typing import Callable, Sequence
+from typing import Callable, Optional, Sequence
 
 from config import ActionSettings
 
 
 Runner = Callable[[Sequence[str]], None]
-CODEX_APP_PATH = "/Applications/Codex.app"
-CODEX_BUNDLE_ID = "com.openai.codex"
+StatusReporter = Callable[[Optional[str]], None]
 
 
 @dataclass
@@ -38,10 +37,12 @@ class ActionDispatcher:
         logger: logging.Logger,
         action_settings: ActionSettings,
         runner: Runner | None = None,
+        status_reporter: StatusReporter | None = None,
     ) -> None:
         self.logger = logger
         self._action_settings = action_settings
         self._runner = runner or self._default_runner
+        self._status_reporter = status_reporter
         self._queue: "queue.Queue[TriggerJob | None]" = queue.Queue()
         self._lock = threading.Lock()
         self._thread = threading.Thread(target=self._worker_loop, name="action-dispatcher", daemon=True)
@@ -94,7 +95,8 @@ class ActionDispatcher:
                 return
             try:
                 self._run_job(job)
-            except Exception:  # pragma: no cover - logged and kept alive in production
+            except Exception as exc:  # pragma: no cover - logged and kept alive in production
+                self._report_status(f"Action dispatch failed: {exc}")
                 self.logger.exception("Action dispatch failed for trigger job")
 
     def _run_job(self, job: TriggerJob) -> None:
@@ -103,8 +105,18 @@ class ActionDispatcher:
         settings = self._snapshot_settings()
         self.logger.info("Executing trigger actions for %s", job.reason)
 
-        if settings.codex_url:
-            self._bring_codex_to_front(settings.codex_url)
+        if not settings.target_app_path:
+            self._report_status("No target app selected. Choose one from the menu bar.")
+            return
+        target_app = self._resolve_target_app(settings.target_app_path)
+        if target_app is None:
+            return
+        if not target_app.exists():
+            self._report_status(f"Selected app is missing: {target_app}")
+            return
+
+        self._launch_target_app(target_app)
+        self._report_status(None)
 
         audio_file = Path(settings.local_audio_file).expanduser() if settings.local_audio_file else None
         if audio_file and audio_file.exists():
@@ -117,21 +129,28 @@ class ActionDispatcher:
         if settings.fallback_media_url:
             self._runner(["open", settings.fallback_media_url])
 
-    def _bring_codex_to_front(self, codex_url: str) -> None:
-        """Launches or reactivates Codex and forces it to the front on macOS."""
+    def _resolve_target_app(self, target_app_path: str) -> Path | None:
+        """Returns a normalized .app bundle path when one is configured."""
 
-        self._runner(["open", "-a", CODEX_APP_PATH])
-        if codex_url and codex_url != "codex://":
-            self._runner(["open", codex_url])
-        self._runner(
-            [
-                "osascript",
-                "-e",
-                f'tell application id "{CODEX_BUNDLE_ID}" to reopen',
-                "-e",
-                f'tell application id "{CODEX_BUNDLE_ID}" to activate',
-            ]
-        )
+        if not target_app_path:
+            return None
+
+        target_app = Path(target_app_path).expanduser()
+        if target_app.suffix.lower() != ".app":
+            self._report_status(f"Selected app is invalid: {target_app}")
+            return None
+        return target_app
+
+    def _launch_target_app(self, target_app: Path) -> None:
+        """Launches or reactivates the configured macOS app bundle."""
+
+        self._runner(["open", "-a", str(target_app)])
+
+    def _report_status(self, message: str | None) -> None:
+        """Pushes recoverable action state back to the daemon when available."""
+
+        if self._status_reporter is not None:
+            self._status_reporter(message)
 
     def _default_runner(self, command: Sequence[str]) -> None:
         """Starts one macOS action command without waiting for completion."""

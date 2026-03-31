@@ -1,7 +1,7 @@
 """
 FILE: app_paths.py
-Purpose: Centralizes filesystem locations for config, logs, sockets, and
-LaunchAgents used by the always-on clap helper.
+Purpose: Centralizes filesystem locations plus shared app metadata such as the
+bundle id, version, and LaunchAgent labels used across runtime and packaging.
 Depends on: Python stdlib only.
 """
 
@@ -12,6 +12,8 @@ from pathlib import Path
 
 
 APP_NAME = "ClapTrigger"
+APP_VERSION = "0.1.0"
+APP_BUNDLE_ID = "com.emanuele.claptrigger"
 SERVICE_LABEL = "com.emanuele.clapd"
 MENU_LABEL = "com.emanuele.clapmenu"
 

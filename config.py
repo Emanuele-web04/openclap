@@ -15,6 +15,8 @@ from typing import Any, Dict, Optional
 from app_paths import AppPaths, ensure_runtime_directories
 from clap_detector import ClapCalibrationProfile, ClapDetectorConfig
 
+LEGACY_DEFAULT_TARGET_APP_PATH = Path("/Applications/Codex.app")
+
 
 @dataclass
 class ServiceSettings:
@@ -30,7 +32,8 @@ class ServiceSettings:
 class ActionSettings:
     """Trigger targets launched after a successful double clap."""
 
-    codex_url: str = "codex://"
+    target_app_path: str = ""
+    target_app_name: str = ""
     local_audio_file: str = ""
     fallback_media_url: str = ""
 
@@ -57,7 +60,7 @@ class AppConfig:
         """Builds a config from partially filled JSON while keeping defaults."""
 
         service = ServiceSettings(**_filter_known_fields(ServiceSettings, raw.get("service", {})))
-        if service.sensitivity_preset not in {"balanced", "sensitive", "strict"}:
+        if service.sensitivity_preset not in {"balanced", "responsive", "sensitive", "strict"}:
             service.sensitivity_preset = "balanced"
 
         detector_raw = dict(raw.get("detector", {}))
@@ -71,6 +74,8 @@ class AppConfig:
         detector_values["calibration_profile"] = calibration_profile
         detector = ClapDetectorConfig(**detector_values)
         actions = ActionSettings(**_filter_known_fields(ActionSettings, raw.get("actions", {})))
+        if actions.target_app_path and not actions.target_app_name:
+            actions.target_app_name = derive_app_name(actions.target_app_path)
         return cls(service=service, detector=detector, actions=actions)
 
 
@@ -79,6 +84,14 @@ def _filter_known_fields(dataclass_type, raw_values: Dict[str, Any]) -> Dict[str
 
     known_fields = dataclass_type.__dataclass_fields__.keys()
     return {key: value for key, value in raw_values.items() if key in known_fields}
+
+
+def derive_app_name(app_bundle_path: str) -> str:
+    """Builds a display-friendly app name from a saved .app bundle path."""
+
+    if not app_bundle_path:
+        return ""
+    return Path(app_bundle_path).expanduser().stem
 
 
 def load_config(paths: AppPaths) -> AppConfig:
@@ -95,7 +108,10 @@ def load_config(paths: AppPaths) -> AppConfig:
     except (OSError, json.JSONDecodeError):
         return AppConfig()
 
-    return AppConfig.from_dict(raw)
+    config = AppConfig.from_dict(raw)
+    if _migrate_legacy_target_app(raw, config):
+        save_config(paths, config)
+    return config
 
 
 def save_config(paths: AppPaths, config: AppConfig) -> None:
@@ -132,11 +148,29 @@ def set_sensitivity_preset(paths: AppPaths, sensitivity_preset: str) -> AppConfi
     config = load_config(paths)
     config.service.sensitivity_preset = sensitivity_preset if sensitivity_preset in {
         "balanced",
+        "responsive",
         "sensitive",
         "strict",
     } else "balanced"
     save_config(paths, config)
     return config
+
+
+def set_target_app(paths: AppPaths, target_app_path: str) -> AppConfig:
+    """Stores the chosen target app bundle path and a cached display name."""
+
+    config = load_config(paths)
+    normalized_path = str(Path(target_app_path).expanduser()) if target_app_path else ""
+    config.actions.target_app_path = normalized_path
+    config.actions.target_app_name = derive_app_name(normalized_path)
+    save_config(paths, config)
+    return config
+
+
+def clear_target_app(paths: AppPaths) -> AppConfig:
+    """Clears any previously selected target app from the saved config."""
+
+    return set_target_app(paths, "")
 
 
 def set_audio_file(paths: AppPaths, local_audio_file: str) -> AppConfig:
@@ -146,3 +180,21 @@ def set_audio_file(paths: AppPaths, local_audio_file: str) -> AppConfig:
     config.actions.local_audio_file = str(Path(local_audio_file).expanduser()) if local_audio_file else ""
     save_config(paths, config)
     return config
+
+
+def _migrate_legacy_target_app(raw: Dict[str, Any], config: AppConfig) -> bool:
+    """Seeds Codex for older configs that predate the generic target-app setting."""
+
+    raw_actions = raw.get("actions", {})
+    if not isinstance(raw_actions, dict):
+        return False
+    if "target_app_path" in raw_actions:
+        return False
+    if config.actions.target_app_path:
+        return False
+    if not LEGACY_DEFAULT_TARGET_APP_PATH.exists():
+        return False
+
+    config.actions.target_app_path = str(LEGACY_DEFAULT_TARGET_APP_PATH)
+    config.actions.target_app_name = derive_app_name(config.actions.target_app_path)
+    return True

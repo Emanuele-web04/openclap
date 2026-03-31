@@ -1,32 +1,36 @@
 """
 FILE: main.py
 Purpose: Exposes CLI entrypoints for the daemon, menu bar app, LaunchAgent
-installer, diagnostics, and local control commands.
+installer, diagnostics, packaging-aware first-launch bootstrap, and local
+control commands.
 Depends on: the shared runtime modules in this project plus sounddevice/rumps.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import time
 from typing import Sequence
 
-from app_paths import AppPaths, MENU_LABEL, SERVICE_LABEL
+from app_paths import APP_NAME, APP_VERSION, AppPaths
 from config import load_config, set_sensitivity_preset
 from control import send_control_command
 from daemon_service import ClapDaemonService, list_input_devices, resolve_input_device
 from launch_agents import install_launch_agents, uninstall_launch_agents
 from menubar import run_menu_bar
+from runtime_env import RuntimeEnvironment
 
 
 def build_parser() -> argparse.ArgumentParser:
     """Builds the subcommand-based CLI for the always-on clap helper."""
 
     parser = argparse.ArgumentParser(description="Always-on clap helper for macOS.")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser("daemon", help="Run the background clap detector service.")
     subparsers.add_parser("menubar", help="Run the menu bar controller app.")
@@ -40,8 +44,9 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("doctor", help="Run basic environment and service diagnostics.")
     subparsers.add_parser("test-trigger", help="Ask the daemon to run the configured trigger actions.")
     subparsers.add_parser("calibrate", help="Start the guided clap calibration on the running daemon.")
+    subparsers.add_parser("version", help="Print the bundled app version.")
     sensitivity_parser = subparsers.add_parser("set-sensitivity", help="Update the detector sensitivity preset.")
-    sensitivity_parser.add_argument("preset", choices=["balanced", "sensitive", "strict"])
+    sensitivity_parser.add_argument("preset", choices=["balanced", "responsive", "sensitive", "strict"])
     return parser
 
 
@@ -54,14 +59,19 @@ def cmd_list_devices() -> int:
     return 0
 
 
-def cmd_doctor(paths: AppPaths) -> int:
+def cmd_doctor(paths: AppPaths, runtime: RuntimeEnvironment) -> int:
     """Prints a compact health report covering config, binaries, devices, and socket state."""
 
     config = load_config(paths)
     checks = []
+    runtime_label = "bundle" if runtime.is_bundled_app else "source"
+    checks.append(("runtime", "ok", runtime_label))
+    checks.append(("version", "ok", APP_VERSION))
+    if runtime.is_bundled_app and runtime.bundle_path is not None:
+        install_status = "ok" if runtime.is_installed_in_applications() else "warning"
+        checks.append(("bundle path", install_status, str(runtime.bundle_path)))
     checks.append(("config", "ok", str(paths.config_path)))
     checks.append(("socket", "ok" if paths.socket_path.exists() else "missing", str(paths.socket_path)))
-    checks.append(("codex", "ok", config.actions.codex_url))
     checks.append(("afplay", "ok" if shutil.which("afplay") else "missing", "afplay"))
     checks.append(("launchd", "ok" if shutil.which("launchctl") else "missing", "launchctl"))
     checks.append(("rumps", "ok" if _module_available("rumps") else "missing", "rumps"))
@@ -79,6 +89,13 @@ def cmd_doctor(paths: AppPaths) -> int:
         checks.append(("input device", "ok", device_name))
     except Exception as exc:  # pragma: no cover - depends on local hardware
         checks.append(("input device", "error", str(exc)))
+
+    if config.actions.target_app_path:
+        target_app_path = Path(config.actions.target_app_path).expanduser()
+        target_name = config.actions.target_app_name or target_app_path.stem
+        checks.append(("target app", "ok" if target_app_path.exists() else "missing", f"{target_name} ({target_app_path})"))
+    else:
+        checks.append(("target app", "unset", "No target app selected"))
 
     if config.actions.local_audio_file:
         audio_path = Path(config.actions.local_audio_file).expanduser()
@@ -164,6 +181,46 @@ def cmd_set_sensitivity(paths: AppPaths, preset: str) -> int:
     return 0
 
 
+def _prompt_move_to_applications(bundle_path: Path) -> None:
+    """Explains that the app must live in Applications before background install."""
+
+    message = (
+        f"Move {APP_NAME}.app into Applications before enabling the always-on background helper. "
+        "After moving it, open the app again and it will install itself in the menu bar."
+    )
+    applescript = (
+        f"display dialog {json.dumps(message)} buttons {{\"OK\"}} "
+        f"default button \"OK\" with title {json.dumps(APP_NAME)}"
+    )
+    subprocess.run(["osascript", "-e", applescript], check=False)
+    subprocess.run(["open", "/Applications"], check=False)
+    subprocess.run(["open", "-R", str(bundle_path)], check=False)
+
+
+def _notify_app_ready() -> None:
+    """Sends a lightweight macOS notification after bundled first launch finishes."""
+
+    applescript = (
+        f"display notification {json.dumps('ClapTrigger is running in your menu bar.')} "
+        f"with title {json.dumps(APP_NAME)}"
+    )
+    subprocess.run(["osascript", "-e", applescript], check=False)
+
+
+def _handle_bundle_launch(paths: AppPaths, runtime: RuntimeEnvironment) -> int:
+    """Bootstraps the packaged app on first launch without exposing CLI steps."""
+
+    if runtime.bundle_path is None:
+        raise SystemExit("Bundled launch requested without a valid .app bundle path.")
+    if not runtime.is_installed_in_applications():
+        _prompt_move_to_applications(runtime.bundle_path)
+        return 0
+
+    install_launch_agents(paths, runtime, dry_run=False)
+    _notify_app_ready()
+    return 0
+
+
 def _module_available(module_name: str) -> bool:
     """Checks whether a module can be imported without importing it eagerly."""
 
@@ -175,16 +232,23 @@ def _module_available(module_name: str) -> bool:
 def main(argv: Sequence[str] | None = None) -> int:
     """Dispatches one CLI subcommand for the clap helper."""
 
+    runtime = RuntimeEnvironment.current(__file__)
     args = build_parser().parse_args(argv)
     paths = AppPaths.from_home()
-    project_root = Path(__file__).resolve().parent
+
+    # Packaged .app launches have no CLI subcommand; bootstrap launchd and exit.
+    if args.command is None:
+        if runtime.is_bundled_app:
+            return _handle_bundle_launch(paths, runtime)
+        build_parser().print_help()
+        return 0
 
     if args.command == "daemon":
         return ClapDaemonService(paths).run()
     if args.command == "menubar":
         return run_menu_bar(paths)
     if args.command == "install":
-        result = install_launch_agents(paths, project_root, dry_run=args.dry_run)
+        result = install_launch_agents(paths, runtime, dry_run=args.dry_run)
         for name, plist_path in result.items():
             print(f"{name}: {plist_path}")
         return 0
@@ -196,11 +260,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "list-devices":
         return cmd_list_devices()
     if args.command == "doctor":
-        return cmd_doctor(paths)
+        return cmd_doctor(paths, runtime)
     if args.command == "test-trigger":
         return cmd_test_trigger(paths)
     if args.command == "calibrate":
         return cmd_calibrate(paths)
+    if args.command == "version":
+        print(APP_VERSION)
+        return 0
     if args.command == "set-sensitivity":
         return cmd_set_sensitivity(paths, args.preset)
 

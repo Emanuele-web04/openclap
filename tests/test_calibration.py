@@ -22,6 +22,8 @@ def make_update(
     band_ratio: float = 1.0,
     high_band_share: float = 0.12,
     spectral_flatness: float = 0.12,
+    zero_crossing_rate: float = 0.35,
+    spectral_centroid: float = 3200.0,
     clap_score: float = 2.0,
 ) -> ClapUpdate:
     """Builds one stable update fixture for calibration-focused tests."""
@@ -38,6 +40,8 @@ def make_update(
         band_ratio=band_ratio,
         high_band_share=high_band_share,
         spectral_flatness=spectral_flatness,
+        zero_crossing_rate=zero_crossing_rate,
+        spectral_centroid=spectral_centroid,
         clap_score=clap_score,
         noise_floor=0.003,
         transient_floor=0.006,

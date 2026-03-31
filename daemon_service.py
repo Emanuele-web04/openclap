@@ -122,6 +122,7 @@ class ClapDaemonService:
         self._action_dispatcher = ActionDispatcher(
             logger=self.logger,
             action_settings=initial_config.actions,
+            status_reporter=self._set_action_error,
         )
         self._detector = ClapDetector(
             initial_config.detector,
@@ -293,6 +294,12 @@ class ClapDaemonService:
         self._last_perf_wall = now
         self._last_perf_cpu = cpu_time
 
+    def _set_action_error(self, message: str | None) -> None:
+        """Publishes recoverable action-launch errors for the menu bar and doctor output."""
+
+        with self._state_lock:
+            self.status.last_error = message or ""
+
     # --- Calibration ----------------------------------------------------
 
     def _advance_calibration(self, update: ClapUpdate, timestamp: float) -> None:
@@ -356,7 +363,7 @@ class ClapDaemonService:
     def _set_sensitivity(self, preset: str) -> Dict[str, object]:
         """Persists a new sensitivity preset and swaps in a detector built with it."""
 
-        if preset not in {"balanced", "sensitive", "strict"}:
+        if preset not in {"balanced", "responsive", "sensitive", "strict"}:
             return {"ok": False, "error": f"Unknown sensitivity preset: {preset}"}
 
         with self._state_lock:
@@ -424,7 +431,8 @@ class ClapDaemonService:
             ),
             "calibration_available": calibration_profile is not None,
             "actions": {
-                "codex_url": config.actions.codex_url,
+                "target_app_path": config.actions.target_app_path,
+                "target_app_name": config.actions.target_app_name,
                 "local_audio_file": config.actions.local_audio_file,
                 "fallback_media_url": config.actions.fallback_media_url,
             },
