@@ -19,9 +19,13 @@ from config import (
     load_config,
     save_config,
     set_armed,
+    set_armed_on_launch,
+    set_diagnostics_enabled,
     set_input_device,
+    set_launch_at_login,
     set_sensitivity_preset,
     set_target_app,
+    set_voice_enabled,
 )
 
 
@@ -42,8 +46,14 @@ class ConfigTests(unittest.TestCase):
 
             self.assertTrue(paths.config_path.exists())
             self.assertTrue(config.service.armed)
+            self.assertTrue(config.service.armed_on_launch)
+            self.assertTrue(config.app.launch_at_login)
+            self.assertTrue(config.app.diagnostics_enabled)
             self.assertEqual(config.actions.target_app_path, "")
             self.assertEqual(config.actions.target_app_name, "")
+            self.assertFalse(config.voice.enabled)
+            self.assertEqual(config.voice.wake_phrase, "jarvis")
+            self.assertEqual(config.voice.engine, "porcupine")
 
     def test_save_and_reload_round_trip(self) -> None:
         """Persisted values should survive a save/load cycle."""
@@ -56,6 +66,12 @@ class ConfigTests(unittest.TestCase):
             config.actions.local_audio_file = "/tmp/test-song.mp3"
             config.service.input_device_name = "MacBook Pro Microphone"
             config.service.sensitivity_preset = "strict"
+            config.service.armed_on_launch = False
+            config.app.launch_at_login = False
+            config.app.diagnostics_enabled = False
+            config.voice.enabled = True
+            config.voice.sensitivity = 0.7
+            config.voice.cooldown_seconds = 3.0
             config.detector.calibration_profile = ClapCalibrationProfile(
                 captured_claps=6,
                 calibrated_at=1234.5,
@@ -79,6 +95,13 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(reloaded.actions.local_audio_file, "/tmp/test-song.mp3")
             self.assertEqual(reloaded.service.input_device_name, "MacBook Pro Microphone")
             self.assertEqual(reloaded.service.sensitivity_preset, "strict")
+            self.assertFalse(reloaded.service.armed_on_launch)
+            self.assertFalse(reloaded.app.launch_at_login)
+            self.assertFalse(reloaded.app.diagnostics_enabled)
+            self.assertTrue(reloaded.voice.enabled)
+            self.assertEqual(reloaded.voice.wake_phrase, "jarvis")
+            self.assertAlmostEqual(reloaded.voice.sensitivity, 0.7)
+            self.assertAlmostEqual(reloaded.voice.cooldown_seconds, 3.0)
             self.assertIsNotNone(reloaded.detector.calibration_profile)
             self.assertEqual(reloaded.detector.calibration_profile.captured_claps, 6)
 
@@ -88,15 +111,23 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             paths = self.make_paths(temp_dir)
             set_armed(paths, False)
+            set_armed_on_launch(paths, False)
+            set_launch_at_login(paths, False)
+            set_diagnostics_enabled(paths, False)
             set_input_device(paths, "USB Mic")
             set_sensitivity_preset(paths, "responsive")
+            set_voice_enabled(paths, True)
             set_target_app(paths, "/Applications/Finder.app")
             clear_target_app(paths)
 
             updated = load_config(paths)
             self.assertFalse(updated.service.armed)
+            self.assertFalse(updated.service.armed_on_launch)
+            self.assertFalse(updated.app.launch_at_login)
+            self.assertFalse(updated.app.diagnostics_enabled)
             self.assertEqual(updated.service.input_device_name, "USB Mic")
             self.assertEqual(updated.service.sensitivity_preset, "responsive")
+            self.assertTrue(updated.voice.enabled)
             self.assertEqual(updated.actions.target_app_path, "")
             self.assertEqual(updated.actions.target_app_name, "")
 

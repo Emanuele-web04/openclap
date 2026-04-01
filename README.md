@@ -1,13 +1,14 @@
-# ClapTrigger
+# OpenClap
 
-Always-on macOS helper that listens for a double clap in the background, opens a user-selected Mac app, and optionally plays a local audio file with native playback.
+Always-on macOS helper that listens for a double clap in the background, opens a user-selected Mac app, and now ships with a native SwiftUI macOS shell for settings, diagnostics, and menu bar control.
 
 ## Free macOS app beta
 
 The project now supports a real downloadable macOS app flow:
 
-- GitHub Releases can ship `ClapTrigger-<version>.dmg`
-- the DMG contains a single `ClapTrigger.app`
+- GitHub Releases can ship `OpenClap-<version>.dmg`
+- the DMG contains a single native `OpenClap.app`
+- the app embeds the Python helper runtime used for clap detection
 - users drag the app into `Applications`, open it once, grant microphone access, and the app installs its own background LaunchAgents
 - Python does not need to be installed on the end-user Mac
 
@@ -20,9 +21,9 @@ The first release track is intentionally simple:
 ## Architecture
 
 - `daemon`: owns the microphone, detector, action queue, config reloads, and private Unix control socket.
-- `menubar`: lightweight status/control UI that talks to the daemon over the local socket.
-- `launchd`: keeps both components alive at login through LaunchAgents.
-- `PyInstaller bundle`: turns the project into one `ClapTrigger.app` that can launch normally, or relaunch itself as `daemon` / `menubar` under `launchd`.
+- `native macOS shell`: SwiftUI app window plus native menu bar companion for settings, diagnostics, and quick controls.
+- `launchd`: keeps the helper daemon and native app alive at login through LaunchAgents.
+- `embedded helper runtime`: the app bundle ships with a PyInstaller-built Python helper inside `Contents/Resources/Helper`.
 
 ## Setup
 
@@ -49,7 +50,7 @@ Run the daemon in the foreground:
 python main.py daemon
 ```
 
-Run the menu bar app:
+Run the legacy internal menu bar app:
 
 ```bash
 python main.py menubar
@@ -115,10 +116,12 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt pyinstaller
 ```
 
+The native shell also requires Xcode command line tools or a full Xcode install because `swift build` is part of the bundle pipeline.
+
 Build the `.app` bundle:
 
 ```bash
-./scripts/build_app.sh
+PYTHON_BIN=.venv/bin/python ./scripts/build_app.sh
 ```
 
 Package the `.dmg`:
@@ -130,15 +133,15 @@ Package the `.dmg`:
 Artifacts land in:
 
 ```text
-dist/ClapTrigger.app
-dist/ClapTrigger-0.1.0.dmg
+dist/OpenClap.app
+dist/OpenClap-0.1.0.dmg
 ```
 
 ## First launch behavior for the bundled app
 
-- if `ClapTrigger.app` is not inside `Applications`, the app shows a prompt and does not install the background helper yet
-- once the app lives in `Applications`, opening it installs or refreshes the LaunchAgents and then hands control to the menu bar instance started by `launchd`
-- the same bundled executable is reused for normal app launch, `daemon`, and `menubar` mode
+- `OpenClap.app` is now the native SwiftUI shell the user sees and keeps in the Dock / menu bar
+- the helper runtime is embedded inside the app bundle and used only for daemon commands and background detection
+- LaunchAgents can point the background UI startup at the native app executable while the daemon keeps using the helper runtime
 
 ## GitHub Releases
 
@@ -154,8 +157,8 @@ git push origin v0.1.0
 That workflow:
 
 - installs dependencies plus `pyinstaller`
-- builds `ClapTrigger.app`
-- builds `ClapTrigger-0.1.0.dmg`
+- builds `OpenClap.app`
+- builds `OpenClap-0.1.0.dmg`
 - attaches the DMG to the GitHub Release
 
 ## Config
@@ -163,12 +166,15 @@ That workflow:
 The persistent config lives at:
 
 ```text
-~/Library/Application Support/ClapTrigger/config.json
+~/Library/Application Support/OpenClap/config.json
 ```
 
 Important keys:
 
+- `app.launch_at_login`: whether LaunchAgents should keep the app + daemon alive at login.
+- `app.diagnostics_enabled`: whether recent detection history should be kept for the diagnostics UI.
 - `service.armed`: enable or disable clap detection.
+- `service.armed_on_launch`: reset the daemon to armed whenever it starts at login.
 - `service.input_device_name`: preferred microphone name.
 - `service.sensitivity_preset`: one of `balanced`, `responsive`, `sensitive`, or `strict`.
 - `detector.calibration_profile`: saved auto-tuned profile from the guided calibration wizard.
@@ -190,8 +196,9 @@ python -m unittest discover -s tests
 
 - The daemon uses a fixed `16 kHz` mono stream, an overlapped event window, and a clap-specific spectral score to reduce false positives from sharp non-clap noises.
 - Calibration now learns a clap range: `2 soft claps + 2 normal claps + 2 loud claps`, then stores min/median/max energy stats so runtime detection handles both quieter and louder claps better.
+- Recent near-misses now carry confidence plus rejection reasons like `noise`, `music-like pattern`, `timing mismatch`, `low confidence`, or `cooldown`, so the native diagnostics UI can explain why a clap was ignored.
 - Trigger actions run on a worker thread, so opening the selected app or starting audio playback does not block microphone processing.
-- The menu bar app requires `rumps`; it is installed through `requirements.txt`.
+- The legacy Python menu bar app still exists as an internal fallback; the public product surface is the native SwiftUI app.
 - Users choose the target app from the menu bar with a native macOS application picker.
 - The default media path is local/native playback. If no local audio file is configured, the daemon can fall back to a URL.
-- Packaging is built around PyInstaller, a generated `.icns` icon, and a drag-and-drop DMG so the project can ship as a real free macOS beta before notarization.
+- Packaging is built around a generated `.icns` icon, a Swift-built native shell, an embedded PyInstaller helper, and a drag-and-drop DMG.

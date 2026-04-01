@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
 FILE: ClapTrigger.spec
-Purpose: Builds a standalone LSUIElement macOS app bundle for ClapTrigger with
+Purpose: Builds a standalone LSUIElement macOS app bundle for OpenClap with
 the same executable reused for no-arg app launch, daemon mode, and menu mode.
 Depends on: PyInstaller plus app_paths.py for shared bundle metadata.
 """
@@ -72,6 +72,6 @@ app = BUNDLE(
         "CFBundleShortVersionString": APP_VERSION,
         "CFBundleVersion": APP_VERSION,
         "LSUIElement": True,
-        "NSMicrophoneUsageDescription": "ClapTrigger needs microphone access to detect your double clap shortcut.",
+        "NSMicrophoneUsageDescription": "OpenClap needs microphone access to detect your double clap shortcut.",
     },
 )

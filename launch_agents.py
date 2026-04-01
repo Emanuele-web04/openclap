@@ -38,6 +38,11 @@ class LaunchTarget:
 
         return [*self.base_program_arguments, command]
 
+    def launch_arguments(self) -> List[str]:
+        """Returns the plain executable invocation used for native app auto-start."""
+
+        return list(self.base_program_arguments)
+
 
 def build_launch_agent_plist(
     label: str,
@@ -67,7 +72,7 @@ def build_launch_agent_plist(
 def resolve_launch_target(runtime: RuntimeEnvironment) -> LaunchTarget:
     """Chooses launchd arguments for either source mode or bundled app mode."""
 
-    if runtime.is_bundled_app:
+    if runtime.launches_from_frozen_binary:
         return LaunchTarget(
             base_program_arguments=[str(runtime.executable_path)],
             working_directory=runtime.working_directory,
@@ -81,8 +86,14 @@ def resolve_launch_target(runtime: RuntimeEnvironment) -> LaunchTarget:
     )
 
 
-def install_launch_agents(paths: AppPaths, runtime: RuntimeEnvironment, dry_run: bool = False) -> Dict[str, str]:
-    """Writes and optionally loads the daemon and menu bar LaunchAgents."""
+def install_launch_agents(
+    paths: AppPaths,
+    runtime: RuntimeEnvironment,
+    dry_run: bool = False,
+    companion_app_bundle_path: Path | None = None,
+    skip_menu_bootstrap: bool = False,
+) -> Dict[str, str]:
+    """Writes and optionally loads the daemon plus either the legacy menu bar or the native companion app."""
 
     ensure_runtime_directories(paths)
     launch_target = resolve_launch_target(runtime)
@@ -96,21 +107,34 @@ def install_launch_agents(paths: AppPaths, runtime: RuntimeEnvironment, dry_run:
         keep_alive=True,
         environment_variables=launch_target.environment_variables,
     )
+
+    menu_program_arguments = launch_target.command_arguments("menubar")
+    menu_working_directory = str(launch_target.working_directory)
+    menu_environment_variables = dict(launch_target.environment_variables)
+    menu_environment_variables["OPENCLAP_BACKGROUND_LAUNCH"] = "1"
+    if companion_app_bundle_path is not None:
+        companion_executable = companion_app_bundle_path / "Contents" / "MacOS" / companion_app_bundle_path.stem
+        menu_program_arguments = [str(companion_executable)]
+        menu_working_directory = str(companion_app_bundle_path.parent)
+
     menu_plist = build_launch_agent_plist(
         label=MENU_LABEL,
-        program_arguments=launch_target.command_arguments("menubar"),
-        working_directory=str(launch_target.working_directory),
+        program_arguments=menu_program_arguments,
+        working_directory=menu_working_directory,
         stdout_path=str(paths.logs_dir / "clapmenu.launchd.out.log"),
         stderr_path=str(paths.logs_dir / "clapmenu.launchd.err.log"),
         keep_alive={"SuccessfulExit": False},
-        environment_variables=launch_target.environment_variables,
+        environment_variables=menu_environment_variables,
     )
 
     if not dry_run:
         paths.daemon_plist_path.write_bytes(plistlib.dumps(daemon_plist))
         paths.menu_plist_path.write_bytes(plistlib.dumps(menu_plist))
         _reload_agent(paths.daemon_plist_path)
-        _reload_agent(paths.menu_plist_path)
+        if skip_menu_bootstrap:
+            _bootout_agent(paths.menu_plist_path)
+        else:
+            _reload_agent(paths.menu_plist_path)
 
     return {
         "daemon_plist": str(paths.daemon_plist_path),

@@ -8,12 +8,14 @@ Depends on: Python stdlib only.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import shutil
 from pathlib import Path
 
 
-APP_NAME = "ClapTrigger"
+APP_NAME = "OpenClap"
 APP_VERSION = "0.1.0"
-APP_BUNDLE_ID = "com.emanuele.claptrigger"
+APP_BUNDLE_ID = "com.emanuele.openclap"
+LEGACY_APP_NAME = "ClapTrigger"
 SERVICE_LABEL = "com.emanuele.clapd"
 MENU_LABEL = "com.emanuele.clapmenu"
 
@@ -53,6 +55,26 @@ class AppPaths:
 def ensure_runtime_directories(paths: AppPaths) -> None:
     """Creates the folders needed by the service, menu bar app, and installer."""
 
+    _migrate_legacy_runtime_paths(paths)
     paths.app_support_dir.mkdir(parents=True, exist_ok=True)
     paths.logs_dir.mkdir(parents=True, exist_ok=True)
     paths.launch_agents_dir.mkdir(parents=True, exist_ok=True)
+
+
+def _migrate_legacy_runtime_paths(paths: AppPaths) -> None:
+    """Moves ClapTrigger support folders to the OpenClap names the first time they are needed."""
+
+    if APP_NAME == LEGACY_APP_NAME:
+        return
+
+    library_dir = paths.app_support_dir.parent.parent
+    legacy_support_dir = library_dir / "Application Support" / LEGACY_APP_NAME
+    legacy_logs_dir = library_dir / "Logs" / LEGACY_APP_NAME
+
+    if legacy_support_dir.exists() and not paths.app_support_dir.exists():
+        paths.app_support_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(legacy_support_dir), str(paths.app_support_dir))
+
+    if legacy_logs_dir.exists() and not paths.logs_dir.exists():
+        paths.logs_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(legacy_logs_dir), str(paths.logs_dir))

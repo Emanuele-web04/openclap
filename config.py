@@ -23,9 +23,18 @@ class ServiceSettings:
     """User-facing runtime settings for the background detector service."""
 
     armed: bool = True
+    armed_on_launch: bool = True
     input_device_name: Optional[str] = None
     debug_logging: bool = False
     sensitivity_preset: str = "balanced"
+
+
+@dataclass
+class AppSettings:
+    """Install-time and UI-level settings shared with the native macOS shell."""
+
+    launch_at_login: bool = True
+    diagnostics_enabled: bool = True
 
 
 @dataclass
@@ -39,26 +48,42 @@ class ActionSettings:
 
 
 @dataclass
+class VoiceSettings:
+    """User-facing settings for the optional always-listening voice wake path."""
+
+    enabled: bool = False
+    wake_phrase: str = "jarvis"
+    engine: str = "porcupine"
+    sensitivity: float = 0.5
+    cooldown_seconds: float = 2.0
+
+
+@dataclass
 class AppConfig:
     """Top-level persisted configuration for the clap helper."""
 
+    app: AppSettings = field(default_factory=AppSettings)
     service: ServiceSettings = field(default_factory=ServiceSettings)
     detector: ClapDetectorConfig = field(default_factory=ClapDetectorConfig)
     actions: ActionSettings = field(default_factory=ActionSettings)
+    voice: VoiceSettings = field(default_factory=VoiceSettings)
 
     def to_dict(self) -> Dict[str, Any]:
         """Serializes the config into JSON-friendly nested dictionaries."""
 
         return {
+            "app": asdict(self.app),
             "service": asdict(self.service),
             "detector": asdict(self.detector),
             "actions": asdict(self.actions),
+            "voice": asdict(self.voice),
         }
 
     @classmethod
     def from_dict(cls, raw: Dict[str, Any]) -> "AppConfig":
         """Builds a config from partially filled JSON while keeping defaults."""
 
+        app = AppSettings(**_filter_known_fields(AppSettings, raw.get("app", {})))
         service = ServiceSettings(**_filter_known_fields(ServiceSettings, raw.get("service", {})))
         if service.sensitivity_preset not in {"balanced", "responsive", "sensitive", "strict"}:
             service.sensitivity_preset = "balanced"
@@ -74,9 +99,16 @@ class AppConfig:
         detector_values["calibration_profile"] = calibration_profile
         detector = ClapDetectorConfig(**detector_values)
         actions = ActionSettings(**_filter_known_fields(ActionSettings, raw.get("actions", {})))
+        voice = VoiceSettings(**_filter_known_fields(VoiceSettings, raw.get("voice", {})))
+        if voice.wake_phrase.strip().lower() != "jarvis":
+            voice.wake_phrase = "jarvis"
+        if voice.engine not in {"porcupine"}:
+            voice.engine = "porcupine"
+        voice.sensitivity = max(0.0, min(1.0, float(voice.sensitivity)))
+        voice.cooldown_seconds = max(0.0, float(voice.cooldown_seconds))
         if actions.target_app_path and not actions.target_app_name:
             actions.target_app_name = derive_app_name(actions.target_app_path)
-        return cls(service=service, detector=detector, actions=actions)
+        return cls(app=app, service=service, detector=detector, actions=actions, voice=voice)
 
 
 def _filter_known_fields(dataclass_type, raw_values: Dict[str, Any]) -> Dict[str, Any]:
@@ -156,6 +188,33 @@ def set_sensitivity_preset(paths: AppPaths, sensitivity_preset: str) -> AppConfi
     return config
 
 
+def set_launch_at_login(paths: AppPaths, launch_at_login: bool) -> AppConfig:
+    """Stores whether the helper should install login-time LaunchAgents."""
+
+    config = load_config(paths)
+    config.app.launch_at_login = launch_at_login
+    save_config(paths, config)
+    return config
+
+
+def set_diagnostics_enabled(paths: AppPaths, diagnostics_enabled: bool) -> AppConfig:
+    """Stores whether the daemon should keep recent detection history."""
+
+    config = load_config(paths)
+    config.app.diagnostics_enabled = diagnostics_enabled
+    save_config(paths, config)
+    return config
+
+
+def set_armed_on_launch(paths: AppPaths, armed_on_launch: bool) -> AppConfig:
+    """Stores whether the detector should reset to armed whenever it starts."""
+
+    config = load_config(paths)
+    config.service.armed_on_launch = armed_on_launch
+    save_config(paths, config)
+    return config
+
+
 def set_target_app(paths: AppPaths, target_app_path: str) -> AppConfig:
     """Stores the chosen target app bundle path and a cached display name."""
 
@@ -178,6 +237,15 @@ def set_audio_file(paths: AppPaths, local_audio_file: str) -> AppConfig:
 
     config = load_config(paths)
     config.actions.local_audio_file = str(Path(local_audio_file).expanduser()) if local_audio_file else ""
+    save_config(paths, config)
+    return config
+
+
+def set_voice_enabled(paths: AppPaths, enabled: bool) -> AppConfig:
+    """Stores whether wake-word detection should run alongside clap detection."""
+
+    config = load_config(paths)
+    config.voice.enabled = enabled
     save_config(paths, config)
     return config
 

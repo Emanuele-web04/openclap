@@ -21,8 +21,8 @@ class RuntimeEnvironmentTests(unittest.TestCase):
 
         runtime = RuntimeEnvironment(
             project_root=Path("/Applications"),
-            executable_path=Path("/Applications/ClapTrigger.app/Contents/MacOS/ClapTrigger"),
-            bundle_path=Path("/Applications/ClapTrigger.app"),
+            executable_path=Path("/Applications/OpenClap.app/Contents/MacOS/OpenClap"),
+            bundle_path=Path("/Applications/OpenClap.app"),
             frozen=True,
         )
 
@@ -35,12 +35,26 @@ class RuntimeEnvironmentTests(unittest.TestCase):
 
         runtime = RuntimeEnvironment(
             project_root=Path("/Users/tester/Downloads"),
-            executable_path=Path("/Users/tester/Downloads/ClapTrigger.app/Contents/MacOS/ClapTrigger"),
-            bundle_path=Path("/Users/tester/Downloads/ClapTrigger.app"),
+            executable_path=Path("/Users/tester/Downloads/OpenClap.app/Contents/MacOS/OpenClap"),
+            bundle_path=Path("/Users/tester/Downloads/OpenClap.app"),
             frozen=True,
         )
 
         self.assertFalse(runtime.is_installed_in_applications())
+
+    def test_embedded_frozen_helper_still_counts_as_frozen_launch_target(self) -> None:
+        """The helper binary inside Resources should still be launchd-safe even without a .app bundle path."""
+
+        runtime = RuntimeEnvironment(
+            project_root=Path("/Applications/OpenClap.app/Contents/Resources/Helper/OpenClapHelper"),
+            executable_path=Path("/Applications/OpenClap.app/Contents/Resources/Helper/OpenClapHelper/OpenClapHelper"),
+            bundle_path=None,
+            frozen=True,
+        )
+
+        self.assertFalse(runtime.is_bundled_app)
+        self.assertTrue(runtime.launches_from_frozen_binary)
+        self.assertEqual(runtime.working_directory, runtime.project_root)
 
 
 if __name__ == "__main__":

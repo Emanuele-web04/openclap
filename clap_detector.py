@@ -104,12 +104,15 @@ class ClapUpdate:
     zero_crossing_rate: float
     spectral_centroid: float
     clap_score: float
-    noise_floor: float
-    transient_floor: float
-    cooldown_remaining: float
-    warmup_remaining: float
-    decay_ratio: float
-    event_state: str
+    confidence: float = 0.0
+    rejection_reason: str = ""
+    noise_floor: float = 0.0
+    transient_floor: float = 0.0
+    transient_density: float = 0.0
+    cooldown_remaining: float = 0.0
+    warmup_remaining: float = 0.0
+    decay_ratio: float = 0.0
+    event_state: str = "idle"
 
 
 class ClapDetector:
@@ -219,7 +222,7 @@ class ClapDetector:
             runtime.min_high_band_share = max(0.16, runtime.min_high_band_share * 0.84)
             runtime.min_spectral_flatness = max(0.13, runtime.min_spectral_flatness * 0.84)
             runtime.min_clap_score = max(3.8, runtime.min_clap_score - 1.05)
-            runtime.min_clap_gap_seconds = max(0.07, runtime.min_clap_gap_seconds * 0.78)
+            runtime.min_clap_gap_seconds = max(0.10, runtime.min_clap_gap_seconds * 0.82)
             runtime.clap_window_seconds = min(2.4, runtime.clap_window_seconds + 0.25)
             runtime.min_zero_crossing_rate = max(0.18, runtime.min_zero_crossing_rate * 0.82)
             runtime.min_spectral_centroid_hz = max(1600.0, runtime.min_spectral_centroid_hz * 0.82)
@@ -235,7 +238,8 @@ class ClapDetector:
             runtime.min_high_band_share = max(0.17, runtime.min_high_band_share * 0.92)
             runtime.min_spectral_flatness = max(0.140, runtime.min_spectral_flatness * 0.92)
             runtime.min_clap_score = max(4.0, runtime.min_clap_score - 0.60)
-            runtime.min_clap_gap_seconds = max(0.15, runtime.min_clap_gap_seconds * 0.90)
+            # Keep a human-like minimum spacing so rapid keypresses do not pair up as a "double clap".
+            runtime.min_clap_gap_seconds = max(0.22, runtime.min_clap_gap_seconds * 0.98)
             runtime.clap_window_seconds = min(1.75, runtime.clap_window_seconds + 0.12)
             runtime.min_zero_crossing_rate = max(0.20, runtime.min_zero_crossing_rate * 0.88)
             runtime.min_spectral_centroid_hz = max(1800.0, runtime.min_spectral_centroid_hz * 0.88)
@@ -247,7 +251,7 @@ class ClapDetector:
             runtime.energy_ratio_threshold *= 1.08
             runtime.transient_ratio_threshold *= 1.08
             runtime.min_clap_score += 0.55
-            runtime.min_clap_gap_seconds = min(0.32, runtime.min_clap_gap_seconds * 1.08)
+            runtime.min_clap_gap_seconds = min(0.32, max(0.24, runtime.min_clap_gap_seconds * 1.08))
             runtime.clap_window_seconds = max(0.85, runtime.clap_window_seconds - 0.12)
             runtime.min_zero_crossing_rate *= 1.06
             runtime.min_spectral_centroid_hz *= 1.06
@@ -255,7 +259,7 @@ class ClapDetector:
         else:
             # Balanced should still feel usable, but random external transients should have a harder time pairing up.
             runtime.min_clap_score += 0.20
-            runtime.min_clap_gap_seconds = max(0.20, runtime.min_clap_gap_seconds)
+            runtime.min_clap_gap_seconds = max(0.24, runtime.min_clap_gap_seconds)
             runtime.clap_window_seconds = min(1.45, runtime.clap_window_seconds)
         return runtime
 
@@ -293,6 +297,33 @@ class ClapDetector:
             return baseline * 1.08
         return baseline
 
+    def _active_fraction(self, signal: np.ndarray, peak: float) -> float:
+        """Measures how much of the event stays energetic around the main impulse."""
+
+        if signal.size == 0 or peak <= 1e-6:
+            return 0.0
+        activity_floor = max(peak * 0.18, self.config.min_transient * 0.55)
+        return float(np.mean(np.abs(signal) >= activity_floor))
+
+    def _looks_like_keyboard_tick(
+        self,
+        signal: np.ndarray,
+        peak: float,
+        spectral_flatness: float,
+        zero_crossing_rate: float,
+        decay_ratio: float,
+    ) -> bool:
+        """Rejects very narrow low-ZCR taps that often happen while typing."""
+
+        active_fraction = self._active_fraction(signal, peak)
+        return (
+            peak >= self.config.min_peak * 0.85
+            and active_fraction <= 0.028
+            and zero_crossing_rate <= max(0.09, self.config.min_zero_crossing_rate * 0.52)
+            and spectral_flatness <= max(0.24, self.config.min_spectral_flatness * 1.15)
+            and decay_ratio >= max(2.8, self._confirm_decay_ratio * 2.3)
+        )
+
     # --- Sequence helpers -----------------------------------------------
 
     def reset_runtime_state(self) -> None:
@@ -328,6 +359,8 @@ class ClapDetector:
         self._first_clap_spectral_envelope: np.ndarray | None = None
         self._recent_transient_timestamps: list[float] = []
         self._density_penalty: float = 0.0
+        self._candidate_confidence: float = 0.0
+        self._candidate_rejection_reason: str = ""
 
     def _empty_features(self) -> dict[str, float]:
         """Builds one zeroed feature snapshot used while no event is active."""
@@ -589,6 +622,71 @@ class ClapDetector:
             return 1.75
         return 1.65
 
+    def _ambient_pressure(self) -> float:
+        """Summarizes how far the recent ambience floor has drifted above the baseline detector floor."""
+
+        rms_pressure = self.ambience_rms_floor / max(self.config.min_rms, 1e-6)
+        transient_pressure = self.ambience_transient_floor / max(self.config.min_transient, 1e-6)
+        return max(rms_pressure, transient_pressure)
+
+    def _effective_min_score(self) -> float:
+        """Raises the runtime acceptance score when the room behaves like music or sustained noise."""
+
+        ambient_penalty = max(0.0, self._ambient_pressure() - 1.15) * 0.45
+        return self.config.min_clap_score + self._density_penalty + ambient_penalty
+
+    def _effective_similarity_threshold(self) -> float:
+        """Requires closer clap-to-clap matching when transient activity stays rhythmic."""
+
+        ambient_penalty = max(0.0, self._ambient_pressure() - 1.15) * 0.04
+        density_penalty = min(self._density_penalty * 0.08, 0.24)
+        return _clamp(self.config.min_inter_clap_similarity + ambient_penalty + density_penalty, 0.0, 0.88)
+
+    def _estimate_confidence(
+        self,
+        *,
+        candidate_score: float,
+        effective_min_score: float,
+        candidate_decay_ratio: float,
+        similarity: float | None,
+        enough_gap: bool,
+    ) -> float:
+        """Normalizes one candidate event into a user-facing 0-1 confidence score."""
+
+        score_ratio = candidate_score / max(effective_min_score, 1e-6)
+        decay_ratio = candidate_decay_ratio / max(self._confirm_decay_ratio, 1e-6)
+        similarity_ratio = 1.0 if similarity is None else similarity / max(self._effective_similarity_threshold(), 1e-6)
+        gap_ratio = 1.0 if enough_gap else 0.0
+        weighted = (
+            min(score_ratio, 1.2) * 0.46
+            + min(decay_ratio, 1.2) * 0.24
+            + min(similarity_ratio, 1.2) * 0.20
+            + gap_ratio * 0.10
+        )
+        return _clamp(weighted / 1.2, 0.0, 1.0)
+
+    def _classify_rejection_reason(
+        self,
+        *,
+        enough_gap: bool,
+        similar_enough: bool,
+        candidate_score: float,
+        effective_min_score: float,
+        candidate_decay_ratio: float,
+        transient_density: float,
+    ) -> str:
+        """Maps one rejected candidate into a product-facing explanation."""
+
+        if not enough_gap:
+            return "timing mismatch"
+        if not similar_enough or transient_density > self.config.max_recent_transient_rate:
+            return "music-like pattern"
+        if self._ambient_pressure() >= 1.45 and candidate_score < effective_min_score:
+            return "noise"
+        if candidate_decay_ratio < self._confirm_decay_ratio or candidate_score < effective_min_score:
+            return "low confidence"
+        return "low confidence"
+
     # --- Event state machine --------------------------------------------
 
     def _start_candidate(
@@ -609,6 +707,8 @@ class ClapDetector:
         self._candidate_best_decay_ratio = features["decay_ratio"]
         self._candidate_best_impulse = impulse_candidate
         self._candidate_spectral_envelope = spectral_envelope
+        self._candidate_confidence = 0.0
+        self._candidate_rejection_reason = ""
 
     def _update_candidate(
         self,
@@ -635,8 +735,8 @@ class ClapDetector:
             self._candidate_best_impulse = impulse_candidate
             self._candidate_spectral_envelope = spectral_envelope
 
-    def _confirm_candidate(self, timestamp: float) -> tuple[bool, bool]:
-        """Ends one candidate event and returns `(is_impulse, triggered)`."""
+    def _confirm_candidate(self, timestamp: float, transient_density: float) -> tuple[bool, bool]:
+        """Ends one candidate event and records its confidence plus any rejection reason."""
 
         is_impulse = False
         triggered = False
@@ -657,10 +757,19 @@ class ClapDetector:
                 self._first_clap_spectral_envelope,
                 self._candidate_spectral_envelope,
             )
-            similar_enough = similarity >= self.config.min_inter_clap_similarity
+            similar_enough = similarity >= self._effective_similarity_threshold()
+        else:
+            similarity = None
 
         # Raise the effective score threshold when there is high transient activity.
-        effective_min_score = self.config.min_clap_score + self._density_penalty
+        effective_min_score = self._effective_min_score()
+        self._candidate_confidence = self._estimate_confidence(
+            candidate_score=self._candidate_best_score,
+            effective_min_score=effective_min_score,
+            candidate_decay_ratio=self._candidate_best_decay_ratio,
+            similarity=similarity,
+            enough_gap=enough_gap,
+        )
 
         confirmed = (
             self._candidate_best_impulse
@@ -678,8 +787,17 @@ class ClapDetector:
             triggered = self._register_clap(self._candidate_peak_at)
             self._event_state = "refractory"
             self._refractory_until = timestamp + self.config.refractory_seconds
+            self._candidate_rejection_reason = ""
         else:
             self._event_state = "idle"
+            self._candidate_rejection_reason = self._classify_rejection_reason(
+                enough_gap=enough_gap,
+                similar_enough=similar_enough,
+                candidate_score=self._candidate_best_score,
+                effective_min_score=effective_min_score,
+                candidate_decay_ratio=self._candidate_best_decay_ratio,
+                transient_density=transient_density,
+            )
 
         self._candidate_started_at = 0.0
         self._candidate_last_active_at = 0.0
@@ -712,6 +830,13 @@ class ClapDetector:
         effective_decay_ratio = max(decay_ratio, soft_decay_ratio)
 
         spectral_envelope = self._compute_spectral_envelope(signal)
+        keyboard_like_impulse = self._looks_like_keyboard_tick(
+            signal,
+            peak,
+            spectral_flatness,
+            zero_crossing_rate,
+            effective_decay_ratio,
+        )
 
         sample_count = len(samples)
         self.processed_seconds += sample_count / max(self.config.sample_rate, 1)
@@ -794,6 +919,7 @@ class ClapDetector:
         broadband_presence_floor = self._minimum_broadband_presence()
         strict_impulse_candidate = (
             warmup_remaining <= 0.0
+            and not keyboard_like_impulse
             and peak >= self.config.min_peak
             and rms >= rms_threshold
             and transient >= transient_threshold
@@ -819,6 +945,7 @@ class ClapDetector:
             )
             soft_impulse_candidate = (
                 warmup_remaining <= 0.0
+                and not keyboard_like_impulse
                 and soft_peak >= self.config.min_peak * 0.74
                 and soft_rms >= rms_threshold * 0.66
                 and soft_transient >= transient_threshold * 0.64
@@ -840,6 +967,7 @@ class ClapDetector:
         )
         loud_impulse_candidate = (
             warmup_remaining <= 0.0
+            and not keyboard_like_impulse
             and peak >= max(self.config.min_peak * 1.18, self._loud_peak_reference * 0.74)
             and transient >= transient_threshold * 0.74
             and high_band_share >= broadband_high_share_floor
@@ -855,6 +983,8 @@ class ClapDetector:
             or soft_transient >= transient_threshold * 0.60
             or peak >= self.config.min_peak * 0.66
         )
+        if keyboard_like_impulse:
+            candidate_active = False
 
         current_features = {
             "peak": peak,
@@ -875,6 +1005,8 @@ class ClapDetector:
             self._update_background_floors(rms, transient)
 
         if cooldown_remaining > 0.0:
+            rejection_reason = "cooldown" if candidate_active else ""
+            confidence = _clamp(clap_score / max(self._effective_min_score(), 1e-6), 0.0, 1.0) if candidate_active else 0.0
             return ClapUpdate(
                 status="cooldown",
                 clap_count=self.clap_count,
@@ -890,8 +1022,11 @@ class ClapDetector:
                 zero_crossing_rate=zero_crossing_rate,
                 spectral_centroid=spectral_centroid,
                 clap_score=clap_score,
+                confidence=confidence,
+                rejection_reason=rejection_reason,
                 noise_floor=self.noise_floor,
                 transient_floor=self.transient_floor,
+                transient_density=transient_density,
                 cooldown_remaining=cooldown_remaining,
                 warmup_remaining=warmup_remaining,
                 decay_ratio=decay_ratio,
@@ -910,7 +1045,7 @@ class ClapDetector:
             quiet_for = timestamp - self._candidate_last_active_at
             if candidate_age >= self._candidate_max_seconds or quiet_for >= self.config.block_duration:
                 emit_features = dict(self._candidate_best_features)
-                is_impulse, triggered = self._confirm_candidate(timestamp)
+                is_impulse, triggered = self._confirm_candidate(timestamp, transient_density)
         elif self._event_state == "refractory" and timestamp < self._refractory_until:
             emit_features = dict(self._candidate_best_features)
 
@@ -924,6 +1059,11 @@ class ClapDetector:
             status = f"clap {self.clap_count}/{self.config.target_claps}"
         else:
             status = "listening"
+
+        reported_confidence = self._candidate_confidence if (is_impulse or self._candidate_rejection_reason) else 0.0
+        reported_rejection_reason = self._candidate_rejection_reason
+        if reported_rejection_reason:
+            self._candidate_rejection_reason = ""
 
         return ClapUpdate(
             status=status,
@@ -940,8 +1080,11 @@ class ClapDetector:
             zero_crossing_rate=emit_features["zero_crossing_rate"],
             spectral_centroid=emit_features["spectral_centroid"],
             clap_score=emit_features["clap_score"],
+            confidence=reported_confidence,
+            rejection_reason=reported_rejection_reason,
             noise_floor=self.noise_floor,
             transient_floor=self.transient_floor,
+            transient_density=transient_density,
             cooldown_remaining=max(0.0, self.cooldown_until - timestamp),
             warmup_remaining=warmup_remaining,
             decay_ratio=emit_features["decay_ratio"],

@@ -1,0 +1,25 @@
+{
+  "": {
+    "dependencies": "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/release/OpenClapDesktop.build/OpenClapDesktop.d",
+    "object": "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/release/OpenClapDesktop.build/OpenClapDesktop.o",
+    "swift-dependencies": "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/release/OpenClapDesktop.build/primary.swiftdeps"
+  },
+  "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/Sources/OpenClapDesktop/HelperBridge.swift": {
+    "object": "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/release/OpenClapDesktop.build/HelperBridge.swift.o",
+    "swiftmodule": "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/release/OpenClapDesktop.build/HelperBridge~partial.swiftmodule",
+    "swift-dependencies": "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/release/OpenClapDesktop.build/HelperBridge.swiftdeps",
+    "diagnostics": "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/release/OpenClapDesktop.build/HelperBridge.dia"
+  },
+  "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/Sources/OpenClapDesktop/OpenClapDesktopApp.swift": {
+    "object": "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/release/OpenClapDesktop.build/OpenClapDesktopApp.swift.o",
+    "swiftmodule": "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/release/OpenClapDesktop.build/OpenClapDesktopApp~partial.swiftmodule",
+    "swift-dependencies": "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/release/OpenClapDesktop.build/OpenClapDesktopApp.swiftdeps",
+    "diagnostics": "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/release/OpenClapDesktop.build/OpenClapDesktopApp.dia"
+  },
+  "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/Sources/OpenClapDesktop/OpenClapModel.swift": {
+    "object": "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/release/OpenClapDesktop.build/OpenClapModel.swift.o",
+    "swiftmodule": "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/release/OpenClapDesktop.build/OpenClapModel~partial.swiftmodule",
+    "swift-dependencies": "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/release/OpenClapDesktop.build/OpenClapModel.swiftdeps",
+    "diagnostics": "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/release/OpenClapDesktop.build/OpenClapModel.dia"
+  }
+}

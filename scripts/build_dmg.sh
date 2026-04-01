@@ -3,7 +3,7 @@ set -euo pipefail
 
 # FILE: build_dmg.sh
 # Purpose: Packages the generated .app into a drag-and-drop DMG for GitHub Releases.
-# Depends on: an existing dist/ClapTrigger.app plus hdiutil available on macOS.
+# Depends on: an existing dist/OpenClap.app plus hdiutil available on macOS.
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"

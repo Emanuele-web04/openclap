@@ -7,6 +7,7 @@ Depends on: sounddevice, numpy, and the shared runtime/config modules.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import asdict, dataclass, replace
 import logging
 import os
@@ -52,8 +53,27 @@ class RuntimeStatus:
     performance_issue: str = "unknown"
     sensitivity_preset: str = "balanced"
     signal_quality: str = "unknown"
+    environment_quality: str = "unknown"
     calibration_state: str = "idle"
     last_calibrated_at: float | None = None
+    last_trigger_source: str = ""
+    last_detection_confidence: float = 0.0
+    last_rejection_reason: str = ""
+
+
+@dataclass
+class DetectionEvent:
+    """Compact detection history row exposed to the menu bar and native app UI."""
+
+    timestamp: float
+    outcome: str
+    reason: str
+    confidence: float
+    clap_score: float
+    signal_quality: str
+    environment_quality: str
+    source: str
+    status: str
 
 
 def ensure_audio_dependencies() -> None:
@@ -99,6 +119,9 @@ class ClapDaemonService:
         ensure_audio_dependencies()
         ensure_runtime_directories(paths)
         initial_config = load_config(paths)
+        if initial_config.service.armed != initial_config.service.armed_on_launch:
+            initial_config.service.armed = initial_config.service.armed_on_launch
+            save_config(paths, initial_config)
         self.paths = paths
         self.logger = setup_logger("clapd", paths, debug=initial_config.service.debug_logging)
         self.config = initial_config
@@ -129,6 +152,7 @@ class ClapDaemonService:
             sensitivity_preset=initial_config.service.sensitivity_preset,
         )
         self._calibration_session: CalibrationSession | None = None
+        self._detection_history: deque[DetectionEvent] = deque(maxlen=24)
 
     # --- Lifecycle ------------------------------------------------------
 
@@ -174,6 +198,7 @@ class ClapDaemonService:
                 if self.config.detector.calibration_profile is not None
                 else None
             )
+            self.status.environment_quality = "unknown"
         self.logger = setup_logger("clapd", self.paths, debug=new_config.service.debug_logging)
 
     def _run_audio_session(self) -> None:
@@ -225,9 +250,8 @@ class ClapDaemonService:
 
                 self._update_performance_metrics()
                 if update.triggered:
-                    self.status.last_trigger_at = time.time()
                     self.logger.info("Double clap detected; dispatching actions")
-                    self._action_dispatcher.enqueue_trigger("double-clap")
+                    self._dispatch_trigger("double-clap", "double-clap")
 
     # --- Status helpers -------------------------------------------------
 
@@ -236,6 +260,10 @@ class ClapDaemonService:
 
         self.status.detector_status = update.status
         self.status.signal_quality = self._classify_signal_quality(update)
+        self.status.environment_quality = self._classify_environment_quality(update)
+        self.status.last_detection_confidence = update.confidence
+        self.status.last_rejection_reason = update.rejection_reason
+        self._record_detection_event(update)
         if update.status == "cooldown" or update.status == "triggered":
             self._update_performance_metrics(force=True)
 
@@ -253,6 +281,55 @@ class ClapDaemonService:
         if self.status.overflow_count > 0:
             return "unstable"
         return "good"
+
+    def _classify_environment_quality(self, update: ClapUpdate) -> str:
+        """Maps ambience and transient density into a coarse environment label."""
+
+        if update.transient_density > self._detector.config.max_recent_transient_rate * 1.15:
+            return "music-like"
+        if self.status.signal_quality in {"clipping", "unstable"}:
+            return self.status.signal_quality
+        if update.noise_floor >= self._detector.config.min_rms * 1.1:
+            return "noisy"
+        if update.noise_floor >= self._detector.config.min_rms * 0.65:
+            return "busy"
+        return "stable"
+
+    def _record_detection_event(self, update: ClapUpdate) -> None:
+        """Captures high-signal trigger and rejection events for diagnostics surfaces."""
+
+        if not self.config.app.diagnostics_enabled:
+            self._detection_history.clear()
+            return
+
+        if update.triggered:
+            outcome = "triggered"
+            reason = "double-clap"
+            source = "double-clap"
+        elif update.is_impulse:
+            outcome = "partial"
+            reason = f"clap {update.clap_count}/{self._detector.config.target_claps}"
+            source = "double-clap"
+        elif update.rejection_reason:
+            outcome = "rejected"
+            reason = update.rejection_reason
+            source = "double-clap"
+        else:
+            return
+
+        self._detection_history.appendleft(
+            DetectionEvent(
+                timestamp=time.time(),
+                outcome=outcome,
+                reason=reason,
+                confidence=round(float(update.confidence), 3),
+                clap_score=round(float(update.clap_score), 3),
+                signal_quality=self.status.signal_quality,
+                environment_quality=self.status.environment_quality,
+                source=source,
+                status=update.status,
+            )
+        )
 
     def _current_cpu_time(self) -> float:
         """Returns total user+system CPU time consumed by the daemon process."""
@@ -299,6 +376,27 @@ class ClapDaemonService:
 
         with self._state_lock:
             self.status.last_error = message or ""
+
+    def _dispatch_trigger(self, trigger_source: str, reason: str) -> None:
+        """Updates shared status fields before enqueueing a trigger action."""
+
+        self.status.last_trigger_at = time.time()
+        self.status.last_trigger_source = trigger_source
+        if self.config.app.diagnostics_enabled and trigger_source != "double-clap":
+            self._detection_history.appendleft(
+                DetectionEvent(
+                    timestamp=self.status.last_trigger_at,
+                    outcome="triggered",
+                    reason=reason,
+                    confidence=1.0,
+                    clap_score=0.0,
+                    signal_quality=self.status.signal_quality,
+                    environment_quality=self.status.environment_quality,
+                    source=trigger_source,
+                    status="triggered",
+                )
+            )
+        self._action_dispatcher.enqueue_trigger(reason)
 
     # --- Calibration ----------------------------------------------------
 
@@ -404,8 +502,7 @@ class ClapDaemonService:
         if command == "set-sensitivity":
             return self._set_sensitivity(str(request.get("preset", "")))
         if command == "test-trigger":
-            self.status.last_trigger_at = time.time()
-            self._action_dispatcher.enqueue_trigger("manual-test")
+            self._dispatch_trigger("manual-test", "manual-test")
             return {"ok": True, "status": self._serialize_status()}
         if command == "quit-service":
             self._stop_requested = True
@@ -423,6 +520,9 @@ class ClapDaemonService:
             "running": not self._stop_requested,
             "config_path": str(self.paths.config_path),
             "socket_path": str(self.paths.socket_path),
+            "launch_at_login": config.app.launch_at_login,
+            "diagnostics_enabled": config.app.diagnostics_enabled,
+            "armed_on_launch": config.service.armed_on_launch,
             "input_device_name": config.service.input_device_name,
             "sensitivity_preset": config.service.sensitivity_preset,
             "calibration_state": self.status.calibration_state,
@@ -430,6 +530,15 @@ class ClapDaemonService:
                 calibration_profile.calibrated_at if calibration_profile is not None else None
             ),
             "calibration_available": calibration_profile is not None,
+            "last_trigger_source": self.status.last_trigger_source,
+            "recent_detection_history": [asdict(event) for event in self._detection_history],
+            "environment_summary": {
+                "signal_quality": self.status.signal_quality,
+                "environment_quality": self.status.environment_quality,
+                "last_detection_confidence": self.status.last_detection_confidence,
+                "last_rejection_reason": self.status.last_rejection_reason,
+                "overflow_count": self.status.overflow_count,
+            },
             "actions": {
                 "target_app_path": config.actions.target_app_path,
                 "target_app_name": config.actions.target_app_name,

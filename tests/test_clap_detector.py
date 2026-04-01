@@ -223,6 +223,22 @@ class ClapDetectorTests(unittest.TestCase):
         self.assertTrue(update.triggered)
         self.assertEqual(update.status, "triggered")
 
+    def test_responsive_preset_keeps_a_human_clap_gap_floor(self) -> None:
+        """Responsive mode should not lower the minimum inter-clap gap into typing-speed territory."""
+
+        detector = ClapDetector(
+            ClapDetectorConfig(
+                sample_rate=16_000,
+                block_duration=0.025,
+                event_window_seconds=0.050,
+                warmup_seconds=0.0,
+                min_clap_gap_seconds=0.08,
+            ),
+            sensitivity_preset="responsive",
+        )
+
+        self.assertGreaterEqual(detector.config.min_clap_gap_seconds, 0.22)
+
     def test_responsive_soft_path_can_confirm_with_effective_decay(self) -> None:
         """Responsive mode should confirm a clap when compression makes the decay look clap-like."""
 
@@ -345,6 +361,24 @@ class ClapDetectorTests(unittest.TestCase):
         self.assertFalse(second.triggered)
         self.assertEqual(second.clap_count, 0)
 
+    def test_keyboard_like_narrow_tick_is_rejected_even_with_high_soft_score(self) -> None:
+        """A narrow typing-like tick should still be rejected even if scoring looks deceptively strong."""
+
+        detector = self.make_detector(sensitivity_preset="responsive")
+        original_compute = detector._compute_signal_features
+
+        def fake_compute(signal):
+            if not np.any(signal):
+                return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            return (0.20, 0.020, 0.045, 10.0, 2.00, 0.28, 0.18, 4.00, 0.06, 4200.0)
+
+        detector._compute_signal_features = fake_compute
+        update = self.emit_event(detector, self.typing_chunk(), timestamp=0.0)
+        detector._compute_signal_features = original_compute
+
+        self.assertFalse(update.is_impulse)
+        self.assertEqual(update.clap_count, 0)
+
     def test_double_music_percussion_does_not_trigger(self) -> None:
         """Repeated hi-hat-like bursts should not pair up into a false double clap."""
 
@@ -437,6 +471,41 @@ class ClapDetectorTests(unittest.TestCase):
         # The density penalty should now be active.
         self.assertGreater(detector._density_penalty, 0.0)
 
+    def test_music_like_candidate_exposes_rejection_reason(self) -> None:
+        """Rhythmic music pressure should surface a product-facing rejection reason for diagnostics."""
+
+        detector = self.make_detector(sensitivity_preset="responsive")
+        for i in range(18):
+            detector.process_chunk(self.music_bed_hit_chunk(seed=i + 40), timestamp=i * 0.08)
+            detector.process_chunk(self.silence_chunk(), timestamp=i * 0.08 + 0.04)
+
+        original_compute = detector._compute_signal_features
+
+        def fake_compute(signal):
+            if not np.any(signal):
+                return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            return (0.12, 0.010, 0.020, 3.6, 1.35, 0.24, 0.20, 1.05, 0.32, 3000.0)
+
+        detector._compute_signal_features = fake_compute
+        update = self.emit_event(detector, self.music_percussion_chunk(), timestamp=1.8)
+        detector._compute_signal_features = original_compute
+
+        self.assertFalse(update.triggered)
+        self.assertIn(update.rejection_reason, {"music-like pattern", "low confidence", "noise"})
+        self.assertGreaterEqual(update.transient_density, 0.0)
+
+    def test_cooldown_candidate_reports_cooldown_reason(self) -> None:
+        """Near-misses during cooldown should report a cooldown reason instead of looking invisible."""
+
+        detector = self.make_detector(cooldown_seconds=2.0)
+        self.emit_clap(detector, timestamp=0.0)
+        self.emit_clap(detector, timestamp=0.34)
+        update = detector.process_chunk(self.clap_chunk(amplitude=1.0, seed=77), timestamp=0.55)
+
+        self.assertEqual(update.status, "cooldown")
+        self.assertEqual(update.rejection_reason, "cooldown")
+        self.assertGreaterEqual(update.confidence, 0.0)
+
     # --- New ClapUpdate fields ------------------------------------------
 
     def test_clap_update_includes_zcr_and_centroid(self) -> None:
@@ -447,6 +516,8 @@ class ClapDetectorTests(unittest.TestCase):
 
         self.assertIsInstance(update.zero_crossing_rate, float)
         self.assertIsInstance(update.spectral_centroid, float)
+        self.assertIsInstance(update.confidence, float)
+        self.assertIsInstance(update.rejection_reason, str)
         # A real broadband clap should have high ZCR and high centroid.
         self.assertGreater(update.zero_crossing_rate, 0.0)
         self.assertGreater(update.spectral_centroid, 0.0)

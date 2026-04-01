@@ -155,7 +155,7 @@ def run_menu_bar(paths: AppPaths) -> int:
         def on_start_calibration(self, _sender) -> None:
             self._send_command("start-calibration")
             rumps.notification(
-                "ClapTrigger",
+                "OpenClap",
                 "Calibration started",
                 "Stay quiet briefly, then do 2 soft claps, 2 normal claps, and 2 loud claps.",
             )

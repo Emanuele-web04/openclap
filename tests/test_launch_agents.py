@@ -11,7 +11,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from launch_agents import build_launch_agent_plist, resolve_launch_target
+from app_paths import AppPaths
+from launch_agents import build_launch_agent_plist, install_launch_agents, resolve_launch_target
 from runtime_env import RuntimeEnvironment
 
 
@@ -60,17 +61,57 @@ class LaunchAgentTests(unittest.TestCase):
 
         runtime = RuntimeEnvironment(
             project_root=Path("/Applications"),
-            executable_path=Path("/Applications/ClapTrigger.app/Contents/MacOS/ClapTrigger"),
-            bundle_path=Path("/Applications/ClapTrigger.app"),
+            executable_path=Path("/Applications/OpenClap.app/Contents/MacOS/OpenClap"),
+            bundle_path=Path("/Applications/OpenClap.app"),
             frozen=True,
         )
         target = resolve_launch_target(runtime)
 
         self.assertEqual(
             target.base_program_arguments,
-            ["/Applications/ClapTrigger.app/Contents/MacOS/ClapTrigger"],
+            ["/Applications/OpenClap.app/Contents/MacOS/OpenClap"],
         )
         self.assertEqual(target.working_directory, Path("/Applications"))
+
+    def test_resolve_embedded_helper_launch_target_uses_frozen_binary(self) -> None:
+        """The embedded helper executable should be reused directly by launchd."""
+
+        runtime = RuntimeEnvironment(
+            project_root=Path("/Applications/OpenClap.app/Contents/Resources/Helper/OpenClapHelper"),
+            executable_path=Path("/Applications/OpenClap.app/Contents/Resources/Helper/OpenClapHelper/OpenClapHelper"),
+            bundle_path=None,
+            frozen=True,
+        )
+        target = resolve_launch_target(runtime)
+
+        self.assertEqual(
+            target.base_program_arguments,
+            ["/Applications/OpenClap.app/Contents/Resources/Helper/OpenClapHelper/OpenClapHelper"],
+        )
+
+    def test_install_launch_agents_can_point_menu_agent_at_native_companion_app(self) -> None:
+        """The login-time UI agent should target the native app executable when provided."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            paths = AppPaths.from_home(root)
+            runtime = RuntimeEnvironment(
+                project_root=root,
+                executable_path=Path("/usr/bin/python3"),
+                bundle_path=None,
+                frozen=False,
+            )
+            companion_app = root / "OpenClap.app"
+            result = install_launch_agents(paths, runtime, dry_run=False, companion_app_bundle_path=companion_app)
+
+            self.assertIn("menu_plist", result)
+            self.assertTrue(paths.menu_plist_path.exists())
+            payload = __import__("plistlib").loads(paths.menu_plist_path.read_bytes())
+            self.assertEqual(
+                payload["ProgramArguments"],
+                [str(companion_app / "Contents" / "MacOS" / "OpenClap")],
+            )
+            self.assertEqual(payload["EnvironmentVariables"]["OPENCLAP_BACKGROUND_LAUNCH"], "1")
 
 
 if __name__ == "__main__":

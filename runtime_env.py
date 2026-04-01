@@ -1,6 +1,6 @@
 """
 FILE: runtime_env.py
-Purpose: Detects whether ClapTrigger is running from source or from a bundled
+ Purpose: Detects whether OpenClap is running from source or from a bundled
 macOS app so install/bootstrap code can choose the correct launch target.
 Depends on: app_paths.py for shared app naming metadata.
 """
@@ -62,6 +62,12 @@ class RuntimeEnvironment:
         if self.is_bundled_app and self.bundle_path is not None:
             return self.bundle_path.parent
         return self.project_root
+
+    @property
+    def launches_from_frozen_binary(self) -> bool:
+        """Returns True for both full app bundles and embedded frozen helper runtimes."""
+
+        return self.frozen
 
     def is_installed_in_applications(self) -> bool:
         """Checks whether the .app lives inside Applications for stable autostart."""
