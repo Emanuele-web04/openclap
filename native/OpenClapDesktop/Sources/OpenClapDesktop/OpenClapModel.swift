@@ -30,8 +30,13 @@ final class OpenClapModel: ObservableObject {
     // ─── Derived View State ───────────────────────────────────
 
     var isArmed: Bool { status?.armed ?? config?.service.armed ?? false }
+    var detectorBackend: String { status?.detectorBackend ?? config?.detector.backend ?? "native" }
     var sensitivityPreset: String { status?.sensitivityPreset ?? config?.service.sensitivityPreset ?? "balanced" }
     var deviceDisplayName: String { status?.deviceName ?? config?.service.inputDeviceName ?? "Default microphone" }
+    var voiceConfirmationEnabled: Bool { config?.voice.enabled ?? false }
+    var wakePhrase: String { config?.voice.wakePhrase ?? "jarvis" }
+    var wakeKeywordPath: String { config?.voice.keywordPath ?? "" }
+    var wakeWindowSeconds: Double { config?.voice.confirmationWindowSeconds ?? 5.0 }
     var targetAppDisplayName: String {
         let targetName = status?.actions.targetAppName ?? config?.actions.targetAppName ?? ""
         if !targetName.isEmpty { return targetName }
@@ -135,6 +140,48 @@ final class OpenClapModel: ObservableObject {
         }
     }
 
+    func setDetectorBackend(_ backend: String) {
+        performMutation { helper in
+            try helper.setDetectorBackend(backend)
+        }
+    }
+
+    func installPector() {
+        performMutation { helper in
+            try helper.installPector()
+        }
+    }
+
+    func setVoiceConfirmationEnabled(_ enabled: Bool) {
+        performMutation { helper in
+            try helper.setVoiceEnabled(enabled)
+        }
+    }
+
+    func setWakePhrase(_ phrase: String) {
+        performMutation { helper in
+            try helper.setWakePhrase(phrase)
+        }
+    }
+
+    func setWakeKeywordPath(_ path: String) {
+        performMutation { helper in
+            try helper.setWakeKeywordPath(path)
+        }
+    }
+
+    func clearWakeKeywordPath() {
+        performMutation { helper in
+            try helper.clearWakeKeywordPath()
+        }
+    }
+
+    func setWakeWindow(_ seconds: Double) {
+        performMutation { helper in
+            try helper.setWakeWindow(seconds)
+        }
+    }
+
     func startCalibration() {
         performMutation { helper in
             try helper.startCalibration()
@@ -180,6 +227,18 @@ final class OpenClapModel: ObservableObject {
 
     func openConfigFolder() {
         helper?.openConfigFolder()
+    }
+
+    func pickWakeKeyword() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose Keyword"
+        panel.message = "Choose the Porcupine .ppn keyword file that should confirm the wake phrase."
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        setWakeKeywordPath(url.path)
     }
 
     // ─── Mutation Helper ──────────────────────────────────────

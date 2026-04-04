@@ -1,0 +1,289 @@
+{
+  "builtTestProducts" : [
+
+  ],
+  "copyCommands" : {
+
+  },
+  "explicitTargetDependencyImportCheckingMode" : {
+    "none" : {
+
+    }
+  },
+  "generatedSourceTargetSet" : [
+
+  ],
+  "pluginDescriptions" : [
+
+  ],
+  "swiftCommands" : {
+    "C.OpenClapDesktop-arm64-apple-macosx-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/OpenClapDesktop.build/sources",
+      "importPath" : "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/Sources/OpenClapDesktop/HelperBridge.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/Sources/OpenClapDesktop/OpenClapDesktopApp.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/Sources/OpenClapDesktop/OpenClapModel.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/OpenClapDesktop.build/sources"
+        }
+      ],
+      "isLibrary" : false,
+      "moduleName" : "OpenClapDesktop",
+      "moduleOutputPath" : "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/Modules/OpenClapDesktop.swiftmodule",
+      "objects" : [
+        "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/OpenClapDesktop.build/HelperBridge.swift.o",
+        "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/OpenClapDesktop.build/OpenClapDesktopApp.swift.o",
+        "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/OpenClapDesktop.build/OpenClapModel.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx13.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j10",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-Xfrontend",
+        "-entry-point-function-name",
+        "-Xfrontend",
+        "OpenClapDesktop_main",
+        "-swift-version",
+        "6",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "openclapdesktop"
+      ],
+      "outputFileMapPath" : "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/OpenClapDesktop.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/OpenClapDesktop.build/HelperBridge.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/OpenClapDesktop.build/OpenClapDesktopApp.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/OpenClapDesktop.build/OpenClapModel.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/Modules/OpenClapDesktop.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/Sources/OpenClapDesktop/HelperBridge.swift",
+        "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/Sources/OpenClapDesktop/OpenClapDesktopApp.swift",
+        "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/Sources/OpenClapDesktop/OpenClapModel.swift"
+      ],
+      "tempsPath" : "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/OpenClapDesktop.build",
+      "wholeModuleOptimization" : false
+    }
+  },
+  "swiftFrontendCommands" : {
+
+  },
+  "swiftTargetScanArgs" : {
+    "OpenClapDesktop" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "OpenClapDesktop",
+      "-package-name",
+      "openclapdesktop",
+      "-c",
+      "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/Sources/OpenClapDesktop/HelperBridge.swift",
+      "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/Sources/OpenClapDesktop/OpenClapDesktopApp.swift",
+      "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/Sources/OpenClapDesktop/OpenClapModel.swift",
+      "-I",
+      "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx13.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j10",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-Xfrontend",
+      "-entry-point-function-name",
+      "-Xfrontend",
+      "OpenClapDesktop_main",
+      "-swift-version",
+      "6",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "openclapdesktop",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ]
+  },
+  "targetDependencyMap" : {
+    "OpenClapDesktop" : [
+
+    ]
+  },
+  "testDiscoveryCommands" : {
+
+  },
+  "testEntryPointCommands" : {
+
+  },
+  "traitConfiguration" : {
+    "default" : {
+
+    }
+  },
+  "writeCommands" : {
+    "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/OpenClapDesktop-entitlement.plist" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<entitlement-plist>"
+        },
+        {
+          "kind" : "virtual",
+          "name" : "<com.apple.security.get-task-allow>"
+        }
+      ],
+      "outputFilePath" : "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/OpenClapDesktop-entitlement.plist"
+    },
+    "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/OpenClapDesktop.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/Sources/OpenClapDesktop/HelperBridge.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/Sources/OpenClapDesktop/OpenClapDesktopApp.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/Sources/OpenClapDesktop/OpenClapModel.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/OpenClapDesktop.build/sources"
+    },
+    "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/OpenClapDesktop.product/Objects.LinkFileList" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<link-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/OpenClapDesktop.build/HelperBridge.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/OpenClapDesktop.build/OpenClapDesktopApp.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/OpenClapDesktop.build/OpenClapModel.swift.o"
+        }
+      ],
+      "outputFilePath" : "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/OpenClapDesktop.product/Objects.LinkFileList"
+    },
+    "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt" : {
+      "alwaysOutOfDate" : true,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<swift-get-version>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+        }
+      ],
+      "outputFilePath" : "/Users/emanueledipietro/Developer/Testing/clap/native/OpenClapDesktop/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+    }
+  }
+}

@@ -101,6 +101,14 @@ python main.py set-sensitivity sensitive
 python main.py set-sensitivity strict
 ```
 
+Require a wake word after the double clap:
+
+```bash
+python main.py set-wake-phrase "jarvis"
+python main.py set-wake-keyword-path /absolute/path/to/wake-up.ppn
+python main.py set-voice-enabled true
+```
+
 Remove the LaunchAgents:
 
 ```bash
@@ -173,10 +181,16 @@ Important keys:
 
 - `app.launch_at_login`: whether LaunchAgents should keep the app + daemon alive at login.
 - `app.diagnostics_enabled`: whether recent detection history should be kept for the diagnostics UI.
+- `detector.backend`: `native` or `pector`.
+- `detector.pector_binary_path`: optional external `pector_c` binary path.
 - `service.armed`: enable or disable clap detection.
 - `service.armed_on_launch`: reset the daemon to armed whenever it starts at login.
 - `service.input_device_name`: preferred microphone name.
 - `service.sensitivity_preset`: one of `balanced`, `responsive`, `sensitive`, or `strict`.
+- `voice.enabled`: when `true`, a double clap only opens a short confirmation window.
+- `voice.wake_phrase`: the wake phrase label expected after the double clap. Default: `jarvis`.
+- `voice.keyword_path`: optional Porcupine `.ppn` file for custom phrases when using the Porcupine backend.
+- `voice.confirmation_window_seconds`: how long the daemon waits for the wake word after the clap.
 - `detector.calibration_profile`: saved auto-tuned profile from the guided calibration wizard.
 - `detector.event_window_seconds`: overlapped analysis window used for event-style clap detection.
 - `detector.refractory_seconds`: duplicate suppression window after one confirmed clap.
@@ -195,6 +209,8 @@ python -m unittest discover -s tests
 ## Notes
 
 - The daemon uses a fixed `16 kHz` mono stream, an overlapped event window, and a clap-specific spectral score to reduce false positives from sharp non-clap noises.
+- The app now supports an optional `pector` backend for stronger percussive onset detection. `pector` is an external GPL-3.0 dependency and is intentionally not bundled into the distributable app.
+- Voice confirmation can gate the final trigger as `clap clap` followed by a wake word. The default phrase is `jarvis`.
 - Calibration now learns a clap range: `2 soft claps + 2 normal claps + 2 loud claps`, then stores min/median/max energy stats so runtime detection handles both quieter and louder claps better.
 - Recent near-misses now carry confidence plus rejection reasons like `noise`, `music-like pattern`, `timing mismatch`, `low confidence`, or `cooldown`, so the native diagnostics UI can explain why a clap was ignored.
 - Trigger actions run on a worker thread, so opening the selected app or starting audio playback does not block microphone processing.
@@ -202,3 +218,19 @@ python -m unittest discover -s tests
 - Users choose the target app from the menu bar with a native macOS application picker.
 - The default media path is local/native playback. If no local audio file is configured, the daemon can fall back to a URL.
 - Packaging is built around a generated `.icns` icon, a Swift-built native shell, an embedded PyInstaller helper, and a drag-and-drop DMG.
+
+## Optional pector backend
+
+To install the external `pector` detector locally and switch the daemon to it:
+
+```bash
+source .venv/bin/activate
+python main.py install-pector
+```
+
+To switch back to the internal detector:
+
+```bash
+source .venv/bin/activate
+python main.py set-detector-backend native
+```

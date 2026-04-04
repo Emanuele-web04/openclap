@@ -150,6 +150,22 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
 
+                Picker("Backend", selection: Binding(
+                    get: { model.detectorBackend },
+                    set: { model.setDetectorBackend($0) }
+                )) {
+                    Text("Native").tag("native")
+                    Text("Pector").tag("pector")
+                }
+                .pickerStyle(.segmented)
+
+                HStack(spacing: 10) {
+                    Button("Install Pector") { model.installPector() }
+                    Text("External GPL backend, not bundled into the app.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 HStack {
                     metricCard(title: "Last Trigger", value: formattedTimestamp(model.status?.lastTriggerAt))
                     metricCard(title: "Confidence", value: confidenceLabel(model.status?.environmentSummary.lastDetectionConfidence))
@@ -207,9 +223,53 @@ struct SettingsView: View {
     }
 
     private var experimentalSection: some View {
-        GroupBox("Experimental") {
-            Text("Voice wake remains intentionally hidden for v1. Clap reliability ships first; wake-word controls stay disabled until the false-positive story is much stronger.")
-                .foregroundStyle(.secondary)
+        GroupBox("Clap + Wake Word") {
+            VStack(alignment: .leading, spacing: 14) {
+                Toggle("Require a wake word after the double clap", isOn: Binding(
+                    get: { model.voiceConfirmationEnabled },
+                    set: { model.setVoiceConfirmationEnabled($0) }
+                ))
+
+                HStack {
+                    Text("Wake Phrase")
+                    Spacer()
+                    Text(model.wakePhrase)
+                        .foregroundStyle(.secondary)
+                    Button("Use \"jarvis\"") { model.setWakePhrase("jarvis") }
+                }
+
+                HStack {
+                    Text("Keyword File")
+                    Spacer()
+                    Text(model.wakeKeywordPath.isEmpty ? "Not selected" : URL(fileURLWithPath: model.wakeKeywordPath).lastPathComponent)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                HStack(spacing: 10) {
+                    Button("Choose Keyword") { model.pickWakeKeyword() }
+                    Button("Clear") { model.clearWakeKeywordPath() }
+                        .disabled(model.wakeKeywordPath.isEmpty)
+                }
+
+                HStack {
+                    Text("Wake Window")
+                    Spacer()
+                    Text(String(format: "%.1fs", model.wakeWindowSeconds))
+                        .foregroundStyle(.secondary)
+                }
+                Slider(
+                    value: Binding(
+                        get: { model.wakeWindowSeconds },
+                        set: { model.setWakeWindow(($0 * 10).rounded() / 10) }
+                    ),
+                    in: 1.0...5.0,
+                    step: 0.1
+                )
+
+                Text("Flow: clap clap, then say the wake phrase inside the short window. The default is jarvis, but you can still switch to another phrase later if you want.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 

@@ -23,17 +23,27 @@ from config import (
     load_config,
     save_config,
     set_armed_on_launch,
+    set_detector_backend,
     set_diagnostics_enabled,
     set_input_device,
     set_launch_at_login,
+    set_pector_binary_path,
     set_sensitivity_preset,
     set_target_app,
+    set_voice_confirmation_window,
+    set_voice_enabled,
+    set_voice_engine,
+    set_voice_keyword_path,
+    set_voice_model_path,
+    set_wake_phrase,
 )
 from control import send_control_command
 from daemon_service import ClapDaemonService, list_input_devices, resolve_input_device
 from launch_agents import install_launch_agents, uninstall_launch_agents
 from menubar import run_menu_bar
+from pector_backend import PECTOR_LICENSE, install_pector_checkout
 from runtime_env import RuntimeEnvironment
+from voice_wake import delete_access_key, install_local_model, store_access_key
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -65,11 +75,49 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("test-trigger", help="Ask the daemon to run the configured trigger actions.")
     config_parser = subparsers.add_parser("config", help="Print the persisted config.")
     config_parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
+    enable_clap_wake_parser = subparsers.add_parser(
+        "enable-clap-wake",
+        help="Enable the clap-clap plus wake-word flow in one step.",
+    )
+    enable_clap_wake_parser.add_argument(
+        "--phrase",
+        default="jarvis",
+        help="Wake phrase label to expect after the double clap. Default: jarvis",
+    )
+    enable_clap_wake_parser.add_argument(
+        "--keyword",
+        default="",
+        help="Optional Porcupine .ppn keyword file. Not needed for the default local engine.",
+    )
+    enable_clap_wake_parser.add_argument(
+        "--window",
+        type=float,
+        default=5.0,
+        help="Seconds to wait for the wake word after the double clap. Default: 5.0",
+    )
+    enable_clap_wake_parser.add_argument(
+        "--engine",
+        choices=["local", "porcupine"],
+        default="local",
+        help="Wake-word backend to use. Default: local",
+    )
+    install_pector_parser = subparsers.add_parser(
+        "install-pector",
+        help="Clone/build the optional external pector backend and switch the detector to it.",
+    )
+    install_pector_parser.add_argument(
+        "--keep-backend",
+        action="store_true",
+        help="Install pector without switching the active backend immediately.",
+    )
     subparsers.add_parser("arm", help="Arm the live detector through the daemon socket.")
     subparsers.add_parser("disarm", help="Pause the live detector through the daemon socket.")
     subparsers.add_parser("reload-config", help="Ask the daemon to reload config from disk.")
     status_parser = subparsers.add_parser("status", help="Print the current daemon status.")
     status_parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
+    status_parser.add_argument("--verbose", action="store_true", help="Show recent clap/voice diagnostics.")
+    status_parser.add_argument("--watch", action="store_true", help="Refresh status continuously until Ctrl+C.")
+    status_parser.add_argument("--interval", type=float, default=1.0, help="Seconds between watch refreshes. Default: 1.0")
     subparsers.add_parser("start-calibration", help="Start calibration without following interactive progress.")
     bootstrap_parser = subparsers.add_parser(
         "bootstrap-native-shell",
@@ -84,6 +132,10 @@ def build_parser() -> argparse.ArgumentParser:
     target_app_parser = subparsers.add_parser("set-target-app", help="Persist one target .app bundle path.")
     target_app_parser.add_argument("path")
     subparsers.add_parser("clear-target-app", help="Clear the configured target app.")
+    detector_backend_parser = subparsers.add_parser("set-detector-backend", help="Choose the active clap backend.")
+    detector_backend_parser.add_argument("backend", choices=["native", "pector"])
+    pector_binary_parser = subparsers.add_parser("set-pector-binary", help="Persist a custom external pector binary path.")
+    pector_binary_parser.add_argument("path")
     input_device_parser = subparsers.add_parser("set-input-device", help="Persist the preferred microphone name.")
     input_device_parser.add_argument("name")
     launch_toggle_parser = subparsers.add_parser("set-launch-at-login", help="Persist auto-start and sync LaunchAgents.")
@@ -98,6 +150,37 @@ def build_parser() -> argparse.ArgumentParser:
     diagnostics_parser.add_argument("value", choices=["true", "false"])
     sensitivity_parser = subparsers.add_parser("set-sensitivity", help="Update the detector sensitivity preset.")
     sensitivity_parser.add_argument("preset", choices=["balanced", "responsive", "sensitive", "strict"])
+    voice_enabled_parser = subparsers.add_parser(
+        "set-voice-enabled",
+        help="Require a wake word after a valid double clap before actions run.",
+    )
+    voice_enabled_parser.add_argument("value", choices=["true", "false"])
+    wake_phrase_parser = subparsers.add_parser(
+        "set-wake-phrase",
+        help="Persist the wake phrase label used after the double clap confirmation window opens.",
+    )
+    wake_phrase_parser.add_argument("phrase")
+    wake_keyword_parser = subparsers.add_parser(
+        "set-wake-keyword-path",
+        help="Persist a Porcupine custom keyword file (.ppn) for non-built-in wake phrases.",
+    )
+    wake_keyword_parser.add_argument("path")
+    subparsers.add_parser("clear-wake-keyword-path", help="Remove the saved custom wake-word keyword file.")
+    wake_window_parser = subparsers.add_parser(
+        "set-wake-window",
+        help="Persist how long the daemon should wait for the wake word after a double clap.",
+    )
+    wake_window_parser.add_argument("seconds", type=float)
+    voice_key_parser = subparsers.add_parser(
+        "set-voice-access-key",
+        help="Save the Porcupine access key used by wake-word detection.",
+    )
+    voice_key_parser.add_argument("key")
+    subparsers.add_parser("clear-voice-access-key", help="Remove the saved Porcupine access key.")
+    subparsers.add_parser(
+        "install-local-voice",
+        help="Install the offline local speech runtime and download the managed wake-word model.",
+    )
     return parser
 
 
@@ -129,25 +212,76 @@ def _send_simple_command(paths: AppPaths, command: str) -> dict:
     return response
 
 
-def cmd_status(paths: AppPaths, as_json: bool = False) -> int:
-    """Prints the current daemon state for either humans or the native app shell."""
-
-    response = _send_simple_command(paths, "status")
-    status = response.get("status", {})
-    if as_json:
-        print(json.dumps(status, indent=2, sort_keys=True))
-        return 0
-
-    if not isinstance(status, dict):
-        raise SystemExit("Daemon returned an invalid status payload")
+def _render_status(status: dict, *, verbose: bool = False) -> None:
+    """Prints one status payload in a compact human-readable layout."""
 
     print(f"armed:            {status.get('armed')}")
+    print(f"backend:          {status.get('detector_backend', 'native')}")
     print(f"signal quality:   {status.get('signal_quality')}")
     print(f"environment:      {status.get('environment_quality')}")
     print(f"sensitivity:      {status.get('sensitivity_preset')}")
     print(f"last trigger:     {status.get('last_trigger_at') or 'never'}")
     print(f"last error:       {status.get('last_error') or 'none'}")
-    return 0
+    if verbose:
+        voice_debug = status.get("voice_debug", {}) if isinstance(status.get("voice_debug"), dict) else {}
+        print(f"voice status:     {status.get('voice_status') or voice_debug.get('status') or 'unknown'}")
+        print(f"voice heard:      {status.get('last_voice_heard') or voice_debug.get('last_heard_text') or 'none'}")
+        print(f"voice matched:    {status.get('last_voice_match') or voice_debug.get('last_matched_variant') or 'none'}")
+        print(f"voice window:     {voice_debug.get('confirmation_remaining_seconds', 0.0):.1f}s remaining")
+        print(f"last rejection:   {status.get('last_rejection_reason') or 'none'}")
+        history = status.get("recent_detection_history", [])
+        if isinstance(history, list) and history:
+            print("recent events:")
+            for event in history[:8]:
+                if not isinstance(event, dict):
+                    continue
+                print(
+                    "  - "
+                    f"{event.get('outcome', 'unknown')}"
+                    f" | {event.get('source', 'unknown')}"
+                    f" | {event.get('reason', 'n/a')}"
+                    f" | conf={event.get('confidence', 0.0)}"
+                    f" | score={event.get('clap_score', 0.0)}"
+                )
+
+
+def cmd_status(
+    paths: AppPaths,
+    as_json: bool = False,
+    verbose: bool = False,
+    watch: bool = False,
+    interval: float = 1.0,
+) -> int:
+    """Prints the current daemon state for either humans or the native app shell."""
+
+    if watch and as_json:
+        raise SystemExit("`status --watch` cannot be combined with `--json`.")
+
+    interval = max(0.2, float(interval))
+    if not watch:
+        response = _send_simple_command(paths, "status")
+        status = response.get("status", {})
+        if as_json:
+            print(json.dumps(status, indent=2, sort_keys=True))
+            return 0
+        if not isinstance(status, dict):
+            raise SystemExit("Daemon returned an invalid status payload")
+        _render_status(status, verbose=verbose)
+        return 0
+
+    try:
+        while True:
+            response = _send_simple_command(paths, "status")
+            status = response.get("status", {})
+            if not isinstance(status, dict):
+                raise SystemExit("Daemon returned an invalid status payload")
+            print("\033[2J\033[H", end="")
+            _render_status(status, verbose=verbose)
+            sys.stdout.flush()
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print()
+        return 0
 
 
 def cmd_config(paths: AppPaths, as_json: bool = False) -> int:
@@ -161,8 +295,16 @@ def cmd_config(paths: AppPaths, as_json: bool = False) -> int:
     print(f"launch at login:  {config.app.launch_at_login}")
     print(f"armed on launch:  {config.service.armed_on_launch}")
     print(f"diagnostics:      {config.app.diagnostics_enabled}")
+    print(f"backend:          {config.detector.backend}")
+    print(f"pector binary:    {config.detector.pector_binary_path or 'not configured'}")
     print(f"input device:     {config.service.input_device_name or 'default'}")
     print(f"sensitivity:      {config.service.sensitivity_preset}")
+    print(f"voice engine:     {config.voice.engine}")
+    print(f"voice confirm:    {config.voice.enabled}")
+    print(f"wake phrase:      {config.voice.wake_phrase}")
+    print(f"wake keyword:     {config.voice.keyword_path or 'not configured'}")
+    print(f"voice model:      {config.voice.model_path or 'managed default'}")
+    print(f"wake window:      {config.voice.confirmation_window_seconds:.1f}s")
     print(f"target app:       {config.actions.target_app_name or config.actions.target_app_path or 'not selected'}")
     return 0
 
@@ -182,6 +324,16 @@ def cmd_doctor(paths: AppPaths, runtime: RuntimeEnvironment) -> int:
     checks.append(("socket", "ok" if paths.socket_path.exists() else "missing", str(paths.socket_path)))
     checks.append(("afplay", "ok" if shutil.which("afplay") else "missing", "afplay"))
     checks.append(("launchd", "ok" if shutil.which("launchctl") else "missing", "launchctl"))
+    pector_path = Path(config.detector.pector_binary_path).expanduser() if config.detector.pector_binary_path else None
+    checks.append(("detector backend", "ok", config.detector.backend))
+    checks.append(("pector license", "notice", PECTOR_LICENSE))
+    checks.append(
+        (
+            "pector binary",
+            "ok" if pector_path and pector_path.exists() else "unset",
+            str(pector_path) if pector_path else "Not configured",
+        )
+    )
     checks.append(("rumps", "ok" if _module_available("rumps") else "missing", "rumps"))
     checks.append(("service plist", "ok" if paths.daemon_plist_path.exists() else "missing", str(paths.daemon_plist_path)))
     checks.append(("menu plist", "ok" if paths.menu_plist_path.exists() else "missing", str(paths.menu_plist_path)))
@@ -189,6 +341,26 @@ def cmd_doctor(paths: AppPaths, runtime: RuntimeEnvironment) -> int:
     checks.append(("armed on launch", "ok" if config.service.armed_on_launch else "disabled", str(config.service.armed_on_launch)))
     checks.append(("diagnostics", "ok" if config.app.diagnostics_enabled else "disabled", str(config.app.diagnostics_enabled)))
     checks.append(("sensitivity", "ok", config.service.sensitivity_preset))
+    checks.append(("voice engine", "ok", config.voice.engine))
+    checks.append(("voice confirm", "ok" if config.voice.enabled else "disabled", str(config.voice.enabled)))
+    checks.append(("wake phrase", "ok", config.voice.wake_phrase))
+    wake_keyword = Path(config.voice.keyword_path).expanduser() if config.voice.keyword_path else None
+    wake_model = Path(config.voice.model_path).expanduser() if config.voice.model_path else None
+    checks.append(
+        (
+            "wake keyword",
+            "ok" if wake_keyword and wake_keyword.exists() else "unset",
+            str(wake_keyword) if wake_keyword else "Not configured",
+        )
+    )
+    checks.append(
+        (
+            "voice model",
+            "ok" if wake_model and wake_model.exists() else "managed",
+            str(wake_model) if wake_model else "Managed default",
+        )
+    )
+    checks.append(("wake window", "ok", f"{config.voice.confirmation_window_seconds:.1f}s"))
     if config.detector.calibration_profile is not None:
         checks.append(("calibration", "ok", f"saved at {config.detector.calibration_profile.calibrated_at:.0f}"))
     else:
@@ -334,6 +506,66 @@ def _parse_bool_flag(value: str) -> bool:
     return value.strip().lower() == "true"
 
 
+def cmd_install_pector(paths: AppPaths, keep_backend: bool = False) -> int:
+    """Installs the optional external pector checkout and persists its binary path."""
+
+    binary_path = install_pector_checkout(paths)
+    set_pector_binary_path(paths, str(binary_path))
+    if not keep_backend:
+        set_detector_backend(paths, "pector")
+    try:
+        _send_simple_command(paths, "reload-config")
+    except SystemExit:
+        pass
+    print(f"Installed pector at {binary_path}")
+    if not keep_backend:
+        print("Detector backend switched to `pector`.")
+    return 0
+
+
+def cmd_install_local_voice(paths: AppPaths) -> int:
+    """Installs the offline local speech runtime and managed recognition model."""
+
+    subprocess.run([sys.executable, "-m", "pip", "install", "vosk"], check=True)
+    model_path = install_local_model()
+    set_voice_engine(paths, "local")
+    set_voice_model_path(paths, str(model_path))
+    try:
+        _send_simple_command(paths, "reload-config")
+    except SystemExit:
+        pass
+    print(f"Installed local voice model at {model_path}")
+    return 0
+
+
+def cmd_enable_clap_wake(paths: AppPaths, phrase: str, keyword: str, window: float, engine: str) -> int:
+    """Configures the clap-plus-wake flow in one step and reloads the daemon when reachable."""
+
+    normalized_phrase = phrase.strip() or "jarvis"
+    normalized_keyword = keyword.strip()
+
+    if engine == "porcupine" and normalized_phrase.lower() not in {"jarvis"} and not normalized_keyword:
+        raise SystemExit(
+            "For a custom wake phrase, pass the Porcupine keyword file too: "
+            "`python main.py enable-clap-wake --engine porcupine --keyword /absolute/path/to/wake-up.ppn`"
+        )
+
+    set_voice_engine(paths, engine)
+    set_wake_phrase(paths, normalized_phrase)
+    set_voice_keyword_path(paths, normalized_keyword if engine == "porcupine" else "")
+    set_voice_confirmation_window(paths, window)
+    set_voice_enabled(paths, True)
+    try:
+        _send_simple_command(paths, "reload-config")
+        reload_note = "Daemon updated."
+    except SystemExit:
+        reload_note = "Config saved. Start the daemon to use it."
+
+    print(reload_note)
+    print(f"Say this after clap clap: {normalized_phrase}")
+    return 0
+
+
 def _prompt_move_to_applications(bundle_path: Path) -> None:
     """Explains that the app must live in Applications before background install."""
 
@@ -420,13 +652,31 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "list-devices":
         return cmd_list_devices(as_json=bool(getattr(args, "json", False)))
     if args.command == "status":
-        return cmd_status(paths, as_json=bool(getattr(args, "json", False)))
+        return cmd_status(
+            paths,
+            as_json=bool(getattr(args, "json", False)),
+            verbose=bool(getattr(args, "verbose", False)),
+            watch=bool(getattr(args, "watch", False)),
+            interval=float(getattr(args, "interval", 1.0)),
+        )
     if args.command == "doctor":
         return cmd_doctor(paths, runtime)
     if args.command == "config":
         return cmd_config(paths, as_json=bool(getattr(args, "json", False)))
     if args.command == "test-trigger":
         return cmd_test_trigger(paths)
+    if args.command == "enable-clap-wake":
+        return cmd_enable_clap_wake(
+            paths,
+            phrase=args.phrase,
+            keyword=args.keyword,
+            window=args.window,
+            engine=args.engine,
+        )
+    if args.command == "install-pector":
+        return cmd_install_pector(paths, keep_backend=bool(getattr(args, "keep_backend", False)))
+    if args.command == "install-local-voice":
+        return cmd_install_local_voice(paths)
     if args.command == "arm":
         _send_simple_command(paths, "arm")
         print("Detector armed.")
@@ -459,6 +709,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             pass
         print("Target app cleared.")
         return 0
+    if args.command == "set-detector-backend":
+        set_detector_backend(paths, args.backend)
+        try:
+            _send_simple_command(paths, "reload-config")
+        except SystemExit:
+            pass
+        print(f"Detector backend saved as `{args.backend}`.")
+        return 0
+    if args.command == "set-pector-binary":
+        set_pector_binary_path(paths, args.path)
+        try:
+            _send_simple_command(paths, "reload-config")
+        except SystemExit:
+            pass
+        print("pector binary path saved.")
+        return 0
     if args.command == "set-input-device":
         set_input_device(paths, args.name)
         try:
@@ -489,6 +755,63 @@ def main(argv: Sequence[str] | None = None) -> int:
         except SystemExit:
             pass
         print("Diagnostics setting saved.")
+        return 0
+    if args.command == "set-voice-enabled":
+        set_voice_enabled(paths, _parse_bool_flag(args.value))
+        try:
+            _send_simple_command(paths, "reload-config")
+        except SystemExit:
+            pass
+        print("Voice confirmation setting saved.")
+        return 0
+    if args.command == "set-wake-phrase":
+        set_wake_phrase(paths, args.phrase)
+        try:
+            _send_simple_command(paths, "reload-config")
+        except SystemExit:
+            pass
+        print(f"Wake phrase saved as `{args.phrase}`.")
+        return 0
+    if args.command == "set-wake-keyword-path":
+        set_voice_keyword_path(paths, args.path)
+        try:
+            _send_simple_command(paths, "reload-config")
+        except SystemExit:
+            pass
+        print("Wake keyword path saved.")
+        return 0
+    if args.command == "clear-wake-keyword-path":
+        set_voice_keyword_path(paths, "")
+        try:
+            _send_simple_command(paths, "reload-config")
+        except SystemExit:
+            pass
+        print("Wake keyword path cleared.")
+        return 0
+    if args.command == "set-wake-window":
+        set_voice_confirmation_window(paths, args.seconds)
+        try:
+            _send_simple_command(paths, "reload-config")
+        except SystemExit:
+            pass
+        print(f"Wake confirmation window saved as `{args.seconds}` seconds.")
+        return 0
+    if args.command == "set-voice-access-key":
+        if not store_access_key(args.key):
+            raise SystemExit("Unable to save the Porcupine access key.")
+        try:
+            _send_simple_command(paths, "reload-config")
+        except SystemExit:
+            pass
+        print("Voice access key saved.")
+        return 0
+    if args.command == "clear-voice-access-key":
+        delete_access_key()
+        try:
+            _send_simple_command(paths, "reload-config")
+        except SystemExit:
+            pass
+        print("Voice access key cleared.")
         return 0
     if args.command == "calibrate":
         return cmd_calibrate(paths)

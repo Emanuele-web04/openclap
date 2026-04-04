@@ -18,6 +18,8 @@ import time
 from typing import Dict, List, Optional
 import sys
 
+import numpy as np
+
 from actions import ActionDispatcher
 from app_paths import AppPaths, ensure_runtime_directories
 from calibration import CalibrationSession
@@ -25,6 +27,8 @@ from clap_detector import ClapDetector, ClapUpdate
 from config import load_config, save_config
 from control import ControlServer
 from logging_utils import setup_logger
+from pector_backend import PectorDetector
+from voice_wake import VoiceWakeDetector, VoiceWakeSettings
 
 try:
     import sounddevice as sd
@@ -51,6 +55,7 @@ class RuntimeStatus:
     queue_depth: int = 0
     uptime_seconds: float = 0.0
     performance_issue: str = "unknown"
+    detector_backend: str = "native"
     sensitivity_preset: str = "balanced"
     signal_quality: str = "unknown"
     environment_quality: str = "unknown"
@@ -59,6 +64,9 @@ class RuntimeStatus:
     last_trigger_source: str = ""
     last_detection_confidence: float = 0.0
     last_rejection_reason: str = ""
+    voice_status: str = "disabled"
+    last_voice_heard: str = ""
+    last_voice_match: str = ""
 
 
 @dataclass
@@ -128,6 +136,7 @@ class ClapDaemonService:
         self.status = RuntimeStatus(
             armed=initial_config.service.armed,
             daemon_pid=os.getpid(),
+            detector_backend=initial_config.detector.backend,
             sensitivity_preset=initial_config.service.sensitivity_preset,
             last_calibrated_at=(
                 initial_config.detector.calibration_profile.calibrated_at
@@ -141,18 +150,21 @@ class ClapDaemonService:
         self._started_at = time.monotonic()
         self._last_perf_wall = self._started_at
         self._last_perf_cpu = self._current_cpu_time()
+        self._last_overflow_at = float("-inf")
         self._control_server = ControlServer(paths=paths, logger=self.logger, handler=self.handle_control_command)
         self._action_dispatcher = ActionDispatcher(
             logger=self.logger,
             action_settings=initial_config.actions,
             status_reporter=self._set_action_error,
         )
-        self._detector = ClapDetector(
-            initial_config.detector,
-            sensitivity_preset=initial_config.service.sensitivity_preset,
-        )
+        self._detector = self._build_detector(initial_config)
+        self._voice_detector = self._build_voice_detector(initial_config)
         self._calibration_session: CalibrationSession | None = None
         self._detection_history: deque[DetectionEvent] = deque(maxlen=24)
+        self._voice_confirmation_deadline: float | None = None
+        self._soft_clap_count = 0
+        self._first_soft_clap_at: float | None = None
+        self._last_soft_clap_at: float | None = None
 
     # --- Lifecycle ------------------------------------------------------
 
@@ -176,6 +188,7 @@ class ClapDaemonService:
                     time.sleep(1.0)
         finally:
             self.logger.info("Stopping clap daemon service")
+            self._close_detector_if_needed()
             self._control_server.stop()
             self._action_dispatcher.stop()
         return 0
@@ -185,13 +198,15 @@ class ClapDaemonService:
 
         new_config = load_config(self.paths)
         with self._state_lock:
+            self._close_detector_if_needed()
             self.config = new_config
             self._action_dispatcher.update_settings(self.config.actions)
-            self._detector = ClapDetector(
-                self.config.detector,
-                sensitivity_preset=self.config.service.sensitivity_preset,
-            )
+            self._detector = self._build_detector(self.config)
+            self._voice_detector = self._build_voice_detector(self.config)
+            self._voice_confirmation_deadline = None
+            self._reset_soft_clap_sequence()
             self.status.armed = self.config.service.armed
+            self.status.detector_backend = self.config.detector.backend
             self.status.sensitivity_preset = self.config.service.sensitivity_preset
             self.status.last_calibrated_at = (
                 self.config.detector.calibration_profile.calibrated_at
@@ -199,7 +214,43 @@ class ClapDaemonService:
                 else None
             )
             self.status.environment_quality = "unknown"
+            self._last_overflow_at = float("-inf")
         self.logger = setup_logger("clapd", self.paths, debug=new_config.service.debug_logging)
+
+    def _build_detector(self, config) -> object:
+        """Builds the configured clap backend while keeping the daemon loop backend-agnostic."""
+
+        if config.detector.backend == "pector":
+            return PectorDetector(self.paths, config.detector)
+        return ClapDetector(
+            config.detector,
+            sensitivity_preset=config.service.sensitivity_preset,
+        )
+
+    def _build_voice_detector(self, config) -> VoiceWakeDetector:
+        """Builds the optional wake-word confirmer used after a confirmed double clap."""
+
+        return VoiceWakeDetector(
+            VoiceWakeSettings(
+                enabled=config.voice.enabled,
+                wake_phrase=config.voice.wake_phrase,
+                keyword_path=config.voice.keyword_path,
+                engine=config.voice.engine,
+                sensitivity=config.voice.sensitivity,
+                cooldown_seconds=config.voice.cooldown_seconds,
+                confirmation_window_seconds=config.voice.confirmation_window_seconds,
+            )
+        )
+
+    def _close_detector_if_needed(self) -> None:
+        """Releases detector resources for backends that own subprocesses or native handles."""
+
+        close = getattr(self._detector, "close", None)
+        if callable(close):
+            close()
+        voice_close = getattr(self, "_voice_detector", None)
+        if voice_close is not None:
+            voice_close.close()
 
     def _run_audio_session(self) -> None:
         """Opens one microphone stream and processes it until reload or shutdown."""
@@ -230,6 +281,7 @@ class ClapDaemonService:
                 now = time.monotonic()
                 if overflowed:
                     self.status.overflow_count += 1
+                    self._last_overflow_at = now
                     self.logger.warning("Audio input overflow detected")
 
                 with self._state_lock:
@@ -248,10 +300,45 @@ class ClapDaemonService:
                     self._update_performance_metrics()
                     continue
 
+                self._expire_voice_confirmation_if_needed(now)
                 self._update_performance_metrics()
                 if update.triggered:
+                    if self._voice_confirmation_required():
+                        self.logger.info(
+                            "Double clap detected; waiting for wake word '%s'",
+                            self.config.voice.wake_phrase,
+                        )
+                        self._arm_voice_confirmation(now)
+                        continue
                     self.logger.info("Double clap detected; dispatching actions")
                     self._dispatch_trigger("double-clap", "double-clap")
+                elif self._voice_confirmation_required() and self._consider_soft_clap_voice_arm(update, now):
+                    self.logger.info(
+                        "Near-miss double clap accepted for voice confirmation; waiting for wake word '%s'",
+                        self.config.voice.wake_phrase,
+                    )
+                    self._arm_voice_confirmation(now)
+                    continue
+
+                if self._voice_confirmation_is_active(now):
+                    voice_chunk = self._prepare_voice_chunk(chunk[:, 0], sample_rate)
+                    if self._voice_detector.process_chunk(voice_chunk, timestamp=now):
+                        self.logger.info(
+                            "Wake word '%s' detected after double clap; dispatching actions",
+                            self.config.voice.wake_phrase,
+                        )
+                        self._voice_confirmation_deadline = None
+                        self.status.detector_status = "triggered"
+                        self.status.last_error = ""
+                        self._dispatch_trigger("double-clap+voice", "double-clap+voice")
+                    elif getattr(self._voice_detector, "status", "") in {
+                        "missing-key",
+                        "missing-keyword",
+                        "missing-dependency",
+                        "error",
+                    }:
+                        self.status.last_error = getattr(self._voice_detector, "last_error", "")
+                self._update_voice_status(now)
 
     # --- Status helpers -------------------------------------------------
 
@@ -263,9 +350,53 @@ class ClapDaemonService:
         self.status.environment_quality = self._classify_environment_quality(update)
         self.status.last_detection_confidence = update.confidence
         self.status.last_rejection_reason = update.rejection_reason
+        if update.status == "missing-backend":
+            self.status.last_error = "pector backend is selected but no binary is installed"
+        elif update.status == "error" and not self.status.last_error:
+            self.status.last_error = "detector backend reported an error"
         self._record_detection_event(update)
         if update.status == "cooldown" or update.status == "triggered":
             self._update_performance_metrics(force=True)
+
+    def _update_voice_status(self, timestamp: float) -> None:
+        """Mirrors the current voice-confirmation state into shared status fields."""
+
+        snapshot = self._voice_debug_snapshot()
+        self.status.voice_status = str(snapshot.get("status", "disabled") or "disabled")
+        self.status.last_voice_heard = str(snapshot.get("last_heard_text", "") or "")
+        self.status.last_voice_match = str(snapshot.get("last_matched_variant", "") or "")
+        if self._voice_confirmation_deadline is not None and timestamp > self._voice_confirmation_deadline:
+            self.status.voice_status = "timed-out"
+
+    def _voice_debug_snapshot(self) -> Dict[str, object]:
+        """Returns a defensive voice-debug payload even when tests use a tiny stub detector."""
+
+        debug_snapshot = getattr(self._voice_detector, "debug_snapshot", None)
+        if callable(debug_snapshot):
+            snapshot = debug_snapshot()
+            if isinstance(snapshot, dict):
+                return snapshot
+        return {
+            "engine": getattr(getattr(self._voice_detector, "settings", None), "engine", ""),
+            "status": getattr(self._voice_detector, "status", ""),
+            "last_error": getattr(self._voice_detector, "last_error", ""),
+            "last_heard_text": "",
+            "last_heard_at": None,
+            "last_matched_variant": "",
+            "recent_text_window": [],
+            "cooldown_seconds": getattr(getattr(self._voice_detector, "settings", None), "cooldown_seconds", 0.0),
+        }
+
+    def _prepare_voice_chunk(self, audio_chunk, input_sample_rate: int) -> np.ndarray:
+        """Resamples shared mic audio into the 16 kHz stream expected by the wake-word engines."""
+
+        normalized = np.asarray(audio_chunk, dtype=np.float32).reshape(-1)
+        if normalized.size == 0 or input_sample_rate == 16_000:
+            return normalized
+        target_size = max(1, int(round(normalized.size * (16_000.0 / max(float(input_sample_rate), 1.0)))))
+        source_positions = np.linspace(0.0, normalized.size - 1, num=normalized.size, dtype=np.float32)
+        target_positions = np.linspace(0.0, normalized.size - 1, num=target_size, dtype=np.float32)
+        return np.interp(target_positions, source_positions, normalized).astype(np.float32)
 
     def _classify_signal_quality(self, update: ClapUpdate) -> str:
         """Maps recent audio conditions into a compact quality label."""
@@ -278,7 +409,7 @@ class ClapDaemonService:
             return "noisy"
         if update.noise_floor >= self._detector.config.min_rms * 0.55:
             return "fair"
-        if self.status.overflow_count > 0:
+        if self._clock_since_last_overflow() < 4.0:
             return "unstable"
         return "good"
 
@@ -331,11 +462,137 @@ class ClapDaemonService:
             )
         )
 
+    def _voice_confirmation_required(self) -> bool:
+        """Returns whether a spoken confirmation should gate the final trigger."""
+
+        return bool(self.config.voice.enabled)
+
+    def _reset_soft_clap_sequence(self) -> None:
+        """Clears the permissive near-miss clap bookkeeping used before the voice gate."""
+
+        self._soft_clap_count = 0
+        self._first_soft_clap_at = None
+        self._last_soft_clap_at = None
+
+    def _consider_soft_clap_voice_arm(self, update: ClapUpdate, timestamp: float) -> bool:
+        """Lets two strong near-miss claps arm the voice gate when hard clap scoring is too strict."""
+
+        if self._voice_confirmation_is_active(timestamp):
+            return False
+        clap_like_event = update.is_impulse or self._is_soft_clap_candidate(update)
+        if not clap_like_event:
+            if self._first_soft_clap_at is not None:
+                window = max(self._detector.config.clap_window_seconds, 1.4)
+                if timestamp - self._first_soft_clap_at > window:
+                    self._reset_soft_clap_sequence()
+            return False
+
+        min_gap = min(getattr(self._detector.config, "min_clap_gap_seconds", 0.08), 0.08)
+        window = max(getattr(self._detector.config, "clap_window_seconds", 1.2), 1.4)
+        if self._first_soft_clap_at is None or timestamp - self._first_soft_clap_at > window:
+            self._soft_clap_count = 1
+            self._first_soft_clap_at = timestamp
+            self._last_soft_clap_at = timestamp
+            return False
+
+        if self._last_soft_clap_at is not None and timestamp - self._last_soft_clap_at < min_gap:
+            return False
+
+        self._soft_clap_count += 1
+        self._last_soft_clap_at = timestamp
+        if self._soft_clap_count >= 2:
+            self._reset_soft_clap_sequence()
+            return True
+        return False
+
+    def _is_soft_clap_candidate(self, update: ClapUpdate) -> bool:
+        """Treats strong near-miss clap events as good enough when a wake word still gates the action."""
+
+        detector_config = getattr(self._detector, "config", None)
+        if detector_config is None:
+            return False
+        if update.triggered:
+            return False
+        if update.rejection_reason not in {"", "low confidence", "music-like pattern", "timing mismatch"}:
+            return False
+        if update.confidence < 0.60:
+            return False
+        if update.clap_score < max(detector_config.min_clap_score * 0.78, 4.4):
+            return False
+        if update.peak < detector_config.min_peak * 0.82:
+            return False
+        if update.transient < detector_config.min_transient * 0.82:
+            return False
+        if self.status.signal_quality in {"clipping"}:
+            return False
+        return True
+
+    def _voice_confirmation_is_active(self, timestamp: float) -> bool:
+        """Returns whether the daemon is currently waiting for the wake word."""
+
+        return self._voice_confirmation_deadline is not None and timestamp <= self._voice_confirmation_deadline
+
+    def _arm_voice_confirmation(self, timestamp: float) -> None:
+        """Starts a short wake-word window after a valid double clap."""
+
+        self._voice_confirmation_deadline = timestamp + self.config.voice.confirmation_window_seconds
+        self._reset_soft_clap_sequence()
+        self._voice_detector.reset_for_listening()
+        self.status.detector_status = f"awaiting '{self.config.voice.wake_phrase}'"
+        self.status.last_rejection_reason = ""
+        self.status.last_error = getattr(self._voice_detector, "last_error", "") or ""
+        self._update_voice_status(timestamp)
+        if self.config.app.diagnostics_enabled:
+            self._detection_history.appendleft(
+                DetectionEvent(
+                    timestamp=time.time(),
+                    outcome="partial",
+                    reason=f"awaiting wake word: {self.config.voice.wake_phrase}",
+                    confidence=1.0,
+                    clap_score=0.0,
+                    signal_quality=self.status.signal_quality,
+                    environment_quality=self.status.environment_quality,
+                    source="voice-confirmation",
+                    status="awaiting-voice",
+                )
+            )
+
+    def _expire_voice_confirmation_if_needed(self, timestamp: float) -> None:
+        """Ends stale wake-word windows so accidental double claps do not linger."""
+
+        if self._voice_confirmation_deadline is None or timestamp <= self._voice_confirmation_deadline:
+            return
+        self._voice_confirmation_deadline = None
+        self._reset_soft_clap_sequence()
+        self.status.detector_status = "listening"
+        self.status.last_rejection_reason = "wake-word timeout"
+        self._update_voice_status(timestamp)
+        if self.config.app.diagnostics_enabled:
+            heard_suffix = f" (heard: {self.status.last_voice_heard})" if self.status.last_voice_heard else ""
+            self._detection_history.appendleft(
+                DetectionEvent(
+                    timestamp=time.time(),
+                    outcome="rejected",
+                    reason=f"wake-word timeout{heard_suffix}",
+                    confidence=0.0,
+                    clap_score=0.0,
+                    signal_quality=self.status.signal_quality,
+                    environment_quality=self.status.environment_quality,
+                    source="voice-confirmation",
+                    status="timeout",
+                )
+            )
+
     def _current_cpu_time(self) -> float:
         """Returns total user+system CPU time consumed by the daemon process."""
 
         usage = resource.getrusage(resource.RUSAGE_SELF)
         return usage.ru_utime + usage.ru_stime
+
+    def _clock_since_last_overflow(self) -> float:
+        """Returns how many monotonic seconds have passed since the last input overflow."""
+
+        return time.monotonic() - self._last_overflow_at
 
     def _current_memory_mb(self) -> float:
         """Returns resident memory in megabytes, adjusted for macOS units."""
@@ -415,10 +672,8 @@ class ClapDaemonService:
             with self._state_lock:
                 self.config.detector.calibration_profile = session.profile
                 save_config(self.paths, self.config)
-                self._detector = ClapDetector(
-                    self.config.detector,
-                    sensitivity_preset=self.config.service.sensitivity_preset,
-                )
+                self._close_detector_if_needed()
+                self._detector = self._build_detector(self.config)
                 self.status.last_calibrated_at = session.profile.calibrated_at
             self.status.calibration_state = "idle"
             self._calibration_session = None
@@ -427,10 +682,8 @@ class ClapDaemonService:
         if session.progress.state == "failed":
             self.logger.warning("Calibration failed: %s", session.progress.result_message)
             with self._state_lock:
-                self._detector = ClapDetector(
-                    self.config.detector,
-                    sensitivity_preset=self.config.service.sensitivity_preset,
-                )
+                self._close_detector_if_needed()
+                self._detector = self._build_detector(self.config)
             self.status.calibration_state = f"failed: {session.progress.result_message}"
             self._calibration_session = None
 
@@ -443,6 +696,7 @@ class ClapDaemonService:
             # Calibration must not reuse the normal double-clap cooldown logic, otherwise it misses samples.
             calibration_config = replace(
                 self.config.detector,
+                backend="native",
                 warmup_seconds=0.0,
                 target_claps=99,
                 clap_window_seconds=30.0,
@@ -467,7 +721,8 @@ class ClapDaemonService:
         with self._state_lock:
             self.config.service.sensitivity_preset = preset
             save_config(self.paths, self.config)
-            self._detector = ClapDetector(self.config.detector, sensitivity_preset=preset)
+            self._close_detector_if_needed()
+            self._detector = self._build_detector(self.config)
             self.status.sensitivity_preset = preset
         self.logger.info("Sensitivity preset changed to %s", preset)
         return {"ok": True, "status": self._serialize_status()}
@@ -523,6 +778,8 @@ class ClapDaemonService:
             "launch_at_login": config.app.launch_at_login,
             "diagnostics_enabled": config.app.diagnostics_enabled,
             "armed_on_launch": config.service.armed_on_launch,
+            "detector_backend": config.detector.backend,
+            "pector_binary_path": config.detector.pector_binary_path,
             "input_device_name": config.service.input_device_name,
             "sensitivity_preset": config.service.sensitivity_preset,
             "calibration_state": self.status.calibration_state,
@@ -532,6 +789,16 @@ class ClapDaemonService:
             "calibration_available": calibration_profile is not None,
             "last_trigger_source": self.status.last_trigger_source,
             "recent_detection_history": [asdict(event) for event in self._detection_history],
+            "voice_debug": {
+                **self._voice_debug_snapshot(),
+                "confirmation_active": self._voice_confirmation_deadline is not None,
+                "confirmation_remaining_seconds": (
+                    max(0.0, self._voice_confirmation_deadline - time.monotonic())
+                    if self._voice_confirmation_deadline is not None
+                    else 0.0
+                ),
+                "configured_phrase": config.voice.wake_phrase,
+            },
             "environment_summary": {
                 "signal_quality": self.status.signal_quality,
                 "environment_quality": self.status.environment_quality,

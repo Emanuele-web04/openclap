@@ -54,6 +54,8 @@ class ClapCalibrationProfile:
 class ClapDetectorConfig:
     """Tunable thresholds for clap-specific audio detection."""
 
+    backend: str = "native"
+    pector_binary_path: str = ""
     sample_rate: int = 16_000
     block_duration: float = 0.025
     event_window_seconds: float = 0.050
@@ -212,21 +214,22 @@ class ClapDetector:
             runtime.clap_window_seconds = _clamp(observed_gap + 0.60, 0.95, 1.8)
 
         if sensitivity_preset == "sensitive":
-            runtime.min_peak *= 0.72
-            runtime.min_rms *= 0.78
-            runtime.min_transient *= 0.72
-            runtime.energy_ratio_threshold = max(1.35, runtime.energy_ratio_threshold * 0.78)
-            runtime.transient_ratio_threshold = max(1.35, runtime.transient_ratio_threshold * 0.78)
-            runtime.min_crest_factor = max(1.95, runtime.min_crest_factor * 0.84)
-            runtime.min_band_ratio = max(1.02, runtime.min_band_ratio * 0.82)
-            runtime.min_high_band_share = max(0.16, runtime.min_high_band_share * 0.84)
-            runtime.min_spectral_flatness = max(0.13, runtime.min_spectral_flatness * 0.84)
-            runtime.min_clap_score = max(3.8, runtime.min_clap_score - 1.05)
-            runtime.min_clap_gap_seconds = max(0.10, runtime.min_clap_gap_seconds * 0.82)
-            runtime.clap_window_seconds = min(2.4, runtime.clap_window_seconds + 0.25)
-            runtime.min_zero_crossing_rate = max(0.18, runtime.min_zero_crossing_rate * 0.82)
-            runtime.min_spectral_centroid_hz = max(1600.0, runtime.min_spectral_centroid_hz * 0.82)
-            runtime.min_inter_clap_similarity = max(0.25, runtime.min_inter_clap_similarity * 0.78)
+            runtime.min_peak *= 0.66
+            runtime.min_rms *= 0.72
+            runtime.min_transient *= 0.66
+            runtime.energy_ratio_threshold = max(1.25, runtime.energy_ratio_threshold * 0.72)
+            runtime.transient_ratio_threshold = max(1.25, runtime.transient_ratio_threshold * 0.72)
+            runtime.min_crest_factor = max(1.85, runtime.min_crest_factor * 0.80)
+            runtime.min_band_ratio = max(0.96, runtime.min_band_ratio * 0.78)
+            runtime.min_high_band_share = max(0.14, runtime.min_high_band_share * 0.80)
+            runtime.min_spectral_flatness = max(0.11, runtime.min_spectral_flatness * 0.80)
+            runtime.min_clap_score = max(3.4, runtime.min_clap_score - 1.35)
+            runtime.min_clap_gap_seconds = max(0.05, runtime.min_clap_gap_seconds * 0.48)
+            runtime.clap_window_seconds = min(2.6, runtime.clap_window_seconds + 0.35)
+            runtime.min_zero_crossing_rate = max(0.16, runtime.min_zero_crossing_rate * 0.78)
+            runtime.min_spectral_centroid_hz = max(1450.0, runtime.min_spectral_centroid_hz * 0.78)
+            runtime.min_inter_clap_similarity = max(0.22, runtime.min_inter_clap_similarity * 0.72)
+            runtime.refractory_seconds = max(0.045, runtime.refractory_seconds * 0.52)
         elif sensitivity_preset == "responsive":
             runtime.min_peak *= 0.86
             runtime.min_rms *= 0.89
@@ -267,7 +270,7 @@ class ClapDetector:
         """Returns the required onset-vs-tail decay ratio for a confirmed clap event."""
 
         if sensitivity_preset == "sensitive":
-            return 0.94
+            return 0.91
         if sensitivity_preset == "responsive":
             return 0.95
         if sensitivity_preset == "strict":
@@ -290,7 +293,7 @@ class ClapDetector:
 
         baseline = max(0.060, self.config.min_high_band_share * self.config.min_spectral_flatness * 0.95)
         if self.sensitivity_preset == "sensitive":
-            return baseline * 0.92
+            return baseline * 0.88
         if self.sensitivity_preset == "responsive":
             return baseline * 0.94
         if self.sensitivity_preset == "strict":
@@ -604,7 +607,7 @@ class ClapDetector:
         """Returns how much stronger one event must be than the recent ambience floor."""
 
         if self.sensitivity_preset == "sensitive":
-            return 1.60
+            return 1.48
         if self.sensitivity_preset == "responsive":
             return 1.72
         if self.sensitivity_preset == "strict":
@@ -615,7 +618,7 @@ class ClapDetector:
         """Returns how much sharper one event must be than the recent ambience transient floor."""
 
         if self.sensitivity_preset == "sensitive":
-            return 1.45
+            return 1.36
         if self.sensitivity_preset == "responsive":
             return 1.52
         if self.sensitivity_preset == "strict":
@@ -640,7 +643,10 @@ class ClapDetector:
 
         ambient_penalty = max(0.0, self._ambient_pressure() - 1.15) * 0.04
         density_penalty = min(self._density_penalty * 0.08, 0.24)
-        return _clamp(self.config.min_inter_clap_similarity + ambient_penalty + density_penalty, 0.0, 0.88)
+        threshold = self.config.min_inter_clap_similarity + ambient_penalty + density_penalty
+        if self.sensitivity_preset == "sensitive":
+            threshold -= 0.10
+        return _clamp(threshold, 0.0, 0.88)
 
     def _estimate_confidence(
         self,
@@ -680,6 +686,12 @@ class ClapDetector:
         if not enough_gap:
             return "timing mismatch"
         if not similar_enough or transient_density > self.config.max_recent_transient_rate:
+            if (
+                self.sensitivity_preset == "sensitive"
+                and candidate_score >= effective_min_score * 0.88
+                and candidate_decay_ratio >= self._confirm_decay_ratio * 0.84
+            ):
+                return "low confidence"
             return "music-like pattern"
         if self._ambient_pressure() >= 1.45 and candidate_score < effective_min_score:
             return "noise"
@@ -828,6 +840,7 @@ class ClapDetector:
             _soft_zero_crossing_rate, _soft_spectral_centroid,
         ) = self._compute_signal_features(compressed_signal)
         effective_decay_ratio = max(decay_ratio, soft_decay_ratio)
+        active_fraction = self._active_fraction(signal, peak)
 
         spectral_envelope = self._compute_spectral_envelope(signal)
         keyboard_like_impulse = self._looks_like_keyboard_tick(
@@ -934,6 +947,13 @@ class ClapDetector:
         )
         soft_impulse_candidate = False
         if self.sensitivity_preset != "strict":
+            soft_peak_factor = 0.70 if self.sensitivity_preset == "sensitive" else 0.74
+            soft_rms_factor = 0.62 if self.sensitivity_preset == "sensitive" else 0.66
+            soft_transient_factor = 0.60 if self.sensitivity_preset == "sensitive" else 0.64
+            soft_crest_factor_floor = 0.70 if self.sensitivity_preset == "sensitive" else 0.74
+            soft_score_factor = 0.70 if self.sensitivity_preset == "sensitive" else 0.74
+            soft_decay_factor = 0.88 if self.sensitivity_preset == "sensitive" else 0.90
+            soft_vote_floor = 3 if self.sensitivity_preset == "sensitive" else 4
             soft_spectral_votes = sum(
                 (
                     band_ratio >= self.config.min_band_ratio * 0.72,
@@ -946,15 +966,15 @@ class ClapDetector:
             soft_impulse_candidate = (
                 warmup_remaining <= 0.0
                 and not keyboard_like_impulse
-                and soft_peak >= self.config.min_peak * 0.74
-                and soft_rms >= rms_threshold * 0.66
-                and soft_transient >= transient_threshold * 0.64
-                and soft_crest_factor >= self.config.min_crest_factor * 0.74
+                and soft_peak >= self.config.min_peak * soft_peak_factor
+                and soft_rms >= rms_threshold * soft_rms_factor
+                and soft_transient >= transient_threshold * soft_transient_factor
+                and soft_crest_factor >= self.config.min_crest_factor * soft_crest_factor_floor
                 and high_band_share >= broadband_high_share_floor
                 and broadband_presence >= broadband_presence_floor
-                and soft_score >= self.config.min_clap_score * 0.74
-                and effective_decay_ratio >= self._confirm_decay_ratio * 0.90
-                and soft_spectral_votes >= 4
+                and soft_score >= self.config.min_clap_score * soft_score_factor
+                and effective_decay_ratio >= self._confirm_decay_ratio * soft_decay_factor
+                and soft_spectral_votes >= soft_vote_floor
             )
         loud_spectral_votes = sum(
             (
@@ -976,7 +996,40 @@ class ClapDetector:
             and decay_ratio >= self._confirm_decay_ratio * 0.82
             and loud_spectral_votes >= 3
         )
-        impulse_candidate = strict_impulse_candidate or soft_impulse_candidate or loud_impulse_candidate
+        rescue_impulse_candidate = False
+        if self.sensitivity_preset == "sensitive":
+            rescue_spectral_votes = sum(
+                (
+                    band_ratio >= self.config.min_band_ratio * 0.58,
+                    high_band_share >= self.config.min_high_band_share * 0.56,
+                    spectral_flatness >= self.config.min_spectral_flatness * 0.56,
+                    zero_crossing_rate >= self.config.min_zero_crossing_rate * 0.56,
+                    spectral_centroid >= self.config.min_spectral_centroid_hz * 0.54,
+                )
+            )
+            rescue_impulse_candidate = (
+                warmup_remaining <= 0.0
+                and not keyboard_like_impulse
+                and transient_density <= self.config.max_recent_transient_rate * 0.92
+                and active_fraction >= 0.030
+                and active_fraction <= 0.30
+                and peak >= max(self.config.min_peak * 0.84, self._soft_peak_reference * 0.70)
+                and soft_transient >= transient_threshold * 0.54
+                and clap_score >= self.config.min_clap_score * 0.60
+                and effective_decay_ratio >= self._confirm_decay_ratio * 0.76
+                and rescue_spectral_votes >= 2
+                and (
+                    peak >= self._soft_peak_reference * 0.95
+                    or transient >= transient_threshold * 0.78
+                    or loud_score >= self.config.min_clap_score * 0.82
+                )
+            )
+        impulse_candidate = (
+            strict_impulse_candidate
+            or soft_impulse_candidate
+            or loud_impulse_candidate
+            or rescue_impulse_candidate
+        )
         candidate_active = (
             impulse_candidate
             or clap_score >= self.config.min_clap_score * 0.56

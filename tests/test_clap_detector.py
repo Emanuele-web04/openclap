@@ -290,6 +290,34 @@ class ClapDetectorTests(unittest.TestCase):
         self.assertEqual(update.clap_count, 1)
         self.assertAlmostEqual(update.decay_ratio, soft_features[7], places=3)
 
+    def test_sensitive_preset_accepts_softer_double_clap(self) -> None:
+        """Sensitive mode should still trigger on a lighter clap pair that balanced mode may miss."""
+
+        detector = self.make_detector(sensitivity_preset="sensitive")
+        self.emit_clap(detector, timestamp=0.0, amplitude=0.72)
+        update = self.emit_clap(detector, timestamp=0.36, amplitude=0.72)
+
+        self.assertTrue(update.triggered)
+        self.assertEqual(update.status, "triggered")
+
+    def test_sensitive_preset_accepts_uneven_human_double_clap(self) -> None:
+        """Sensitive mode should keep working when one clap is louder and rougher than the other."""
+
+        detector = self.make_detector(sensitivity_preset="sensitive")
+        self.emit_clap(detector, timestamp=0.0, amplitude=1.25)
+        update = self.emit_clap(detector, timestamp=0.38, amplitude=0.58)
+
+        self.assertTrue(update.triggered)
+        self.assertEqual(update.status, "triggered")
+
+    def test_sensitive_preset_allows_faster_double_clap_gap(self) -> None:
+        """Sensitive mode should lower the inter-clap gap and refractory enough for fast human double claps."""
+
+        detector = self.make_detector(sensitivity_preset="sensitive")
+
+        self.assertLessEqual(detector.config.min_clap_gap_seconds, 0.08)
+        self.assertLessEqual(detector.config.refractory_seconds, 0.06)
+
     def test_sustained_event_does_not_count_twice(self) -> None:
         """A long noisy burst should remain one clap event, not two separate impulses."""
 

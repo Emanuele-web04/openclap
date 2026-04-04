@@ -20,12 +20,19 @@ from config import (
     save_config,
     set_armed,
     set_armed_on_launch,
+    set_detector_backend,
     set_diagnostics_enabled,
     set_input_device,
     set_launch_at_login,
+    set_pector_binary_path,
     set_sensitivity_preset,
     set_target_app,
+    set_voice_confirmation_window,
     set_voice_enabled,
+    set_voice_engine,
+    set_voice_keyword_path,
+    set_voice_model_path,
+    set_wake_phrase,
 )
 
 
@@ -49,11 +56,16 @@ class ConfigTests(unittest.TestCase):
             self.assertTrue(config.service.armed_on_launch)
             self.assertTrue(config.app.launch_at_login)
             self.assertTrue(config.app.diagnostics_enabled)
+            self.assertEqual(config.detector.backend, "native")
+            self.assertEqual(config.detector.pector_binary_path, "")
             self.assertEqual(config.actions.target_app_path, "")
             self.assertEqual(config.actions.target_app_name, "")
             self.assertFalse(config.voice.enabled)
             self.assertEqual(config.voice.wake_phrase, "jarvis")
-            self.assertEqual(config.voice.engine, "porcupine")
+            self.assertEqual(config.voice.keyword_path, "")
+            self.assertEqual(config.voice.model_path, "")
+            self.assertEqual(config.voice.engine, "local")
+            self.assertAlmostEqual(config.voice.confirmation_window_seconds, 4.0)
 
     def test_save_and_reload_round_trip(self) -> None:
         """Persisted values should survive a save/load cycle."""
@@ -69,9 +81,16 @@ class ConfigTests(unittest.TestCase):
             config.service.armed_on_launch = False
             config.app.launch_at_login = False
             config.app.diagnostics_enabled = False
+            config.detector.backend = "pector"
+            config.detector.pector_binary_path = "/tmp/pector/bin/pector_c"
             config.voice.enabled = True
+            config.voice.wake_phrase = "jarvis"
+            config.voice.keyword_path = ""
+            config.voice.model_path = "/tmp/vosk-model"
+            config.voice.engine = "local"
             config.voice.sensitivity = 0.7
             config.voice.cooldown_seconds = 3.0
+            config.voice.confirmation_window_seconds = 4.0
             config.detector.calibration_profile = ClapCalibrationProfile(
                 captured_claps=6,
                 calibrated_at=1234.5,
@@ -98,10 +117,16 @@ class ConfigTests(unittest.TestCase):
             self.assertFalse(reloaded.service.armed_on_launch)
             self.assertFalse(reloaded.app.launch_at_login)
             self.assertFalse(reloaded.app.diagnostics_enabled)
+            self.assertEqual(reloaded.detector.backend, "pector")
+            self.assertEqual(reloaded.detector.pector_binary_path, "/tmp/pector/bin/pector_c")
             self.assertTrue(reloaded.voice.enabled)
             self.assertEqual(reloaded.voice.wake_phrase, "jarvis")
+            self.assertEqual(reloaded.voice.keyword_path, "")
+            self.assertEqual(reloaded.voice.model_path, "/tmp/vosk-model")
+            self.assertEqual(reloaded.voice.engine, "local")
             self.assertAlmostEqual(reloaded.voice.sensitivity, 0.7)
             self.assertAlmostEqual(reloaded.voice.cooldown_seconds, 3.0)
+            self.assertAlmostEqual(reloaded.voice.confirmation_window_seconds, 4.0)
             self.assertIsNotNone(reloaded.detector.calibration_profile)
             self.assertEqual(reloaded.detector.calibration_profile.captured_claps, 6)
 
@@ -112,11 +137,18 @@ class ConfigTests(unittest.TestCase):
             paths = self.make_paths(temp_dir)
             set_armed(paths, False)
             set_armed_on_launch(paths, False)
+            set_detector_backend(paths, "pector")
+            set_pector_binary_path(paths, "/tmp/pector/bin/pector_c")
             set_launch_at_login(paths, False)
             set_diagnostics_enabled(paths, False)
             set_input_device(paths, "USB Mic")
             set_sensitivity_preset(paths, "responsive")
             set_voice_enabled(paths, True)
+            set_voice_engine(paths, "local")
+            set_wake_phrase(paths, "jarvis")
+            set_voice_keyword_path(paths, "")
+            set_voice_model_path(paths, "/tmp/vosk-model")
+            set_voice_confirmation_window(paths, 3.5)
             set_target_app(paths, "/Applications/Finder.app")
             clear_target_app(paths)
 
@@ -125,9 +157,16 @@ class ConfigTests(unittest.TestCase):
             self.assertFalse(updated.service.armed_on_launch)
             self.assertFalse(updated.app.launch_at_login)
             self.assertFalse(updated.app.diagnostics_enabled)
+            self.assertEqual(updated.detector.backend, "pector")
+            self.assertEqual(updated.detector.pector_binary_path, "/tmp/pector/bin/pector_c")
             self.assertEqual(updated.service.input_device_name, "USB Mic")
             self.assertEqual(updated.service.sensitivity_preset, "responsive")
             self.assertTrue(updated.voice.enabled)
+            self.assertEqual(updated.voice.engine, "local")
+            self.assertEqual(updated.voice.wake_phrase, "jarvis")
+            self.assertEqual(updated.voice.keyword_path, "")
+            self.assertEqual(updated.voice.model_path, "/tmp/vosk-model")
+            self.assertAlmostEqual(updated.voice.confirmation_window_seconds, 3.5)
             self.assertEqual(updated.actions.target_app_path, "")
             self.assertEqual(updated.actions.target_app_name, "")
 

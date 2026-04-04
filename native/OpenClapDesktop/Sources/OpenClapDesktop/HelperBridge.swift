@@ -13,6 +13,16 @@ struct HelperConfigPayload: Decodable {
 }
 
 struct OpenClapConfigPayload: Decodable {
+    struct DetectorSettings: Decodable {
+        let backend: String
+        let pectorBinaryPath: String
+
+        private enum CodingKeys: String, CodingKey {
+            case backend
+            case pectorBinaryPath = "pector_binary_path"
+        }
+    }
+
     struct AppSettings: Decodable {
         let launchAtLogin: Bool
         let diagnosticsEnabled: Bool
@@ -51,9 +61,25 @@ struct OpenClapConfigPayload: Decodable {
         }
     }
 
+    struct VoiceSettings: Decodable {
+        let enabled: Bool
+        let wakePhrase: String
+        let keywordPath: String
+        let confirmationWindowSeconds: Double
+
+        private enum CodingKeys: String, CodingKey {
+            case enabled
+            case wakePhrase = "wake_phrase"
+            case keywordPath = "keyword_path"
+            case confirmationWindowSeconds = "confirmation_window_seconds"
+        }
+    }
+
     let app: AppSettings
     let service: ServiceSettings
+    let detector: DetectorSettings
     let actions: ActionSettings
+    let voice: VoiceSettings
 }
 
 struct StatusResponse: Decodable {
@@ -109,6 +135,8 @@ struct StatusResponse: Decodable {
     }
 
     let armed: Bool
+    let detectorBackend: String
+    let pectorBinaryPath: String
     let launchAtLogin: Bool
     let diagnosticsEnabled: Bool
     let armedOnLaunch: Bool
@@ -129,6 +157,8 @@ struct StatusResponse: Decodable {
 
     private enum CodingKeys: String, CodingKey {
         case armed, actions
+        case detectorBackend = "detector_backend"
+        case pectorBinaryPath = "pector_binary_path"
         case launchAtLogin = "launch_at_login"
         case diagnosticsEnabled = "diagnostics_enabled"
         case armedOnLaunch = "armed_on_launch"
@@ -215,6 +245,13 @@ final class HelperBridge: @unchecked Sendable {
     func setInputDevice(name: String) throws { _ = try run(["set-input-device", name]) }
     func setArmedOnLaunch(_ value: Bool) throws { _ = try run(["set-armed-on-launch", value ? "true" : "false"]) }
     func setDiagnosticsEnabled(_ value: Bool) throws { _ = try run(["set-diagnostics-enabled", value ? "true" : "false"]) }
+    func setDetectorBackend(_ backend: String) throws { _ = try run(["set-detector-backend", backend]) }
+    func installPector() throws { _ = try run(["install-pector"]) }
+    func setVoiceEnabled(_ value: Bool) throws { _ = try run(["set-voice-enabled", value ? "true" : "false"]) }
+    func setWakePhrase(_ phrase: String) throws { _ = try run(["set-wake-phrase", phrase]) }
+    func setWakeKeywordPath(_ path: String) throws { _ = try run(["set-wake-keyword-path", path]) }
+    func clearWakeKeywordPath() throws { _ = try run(["clear-wake-keyword-path"]) }
+    func setWakeWindow(_ seconds: Double) throws { _ = try run(["set-wake-window", String(seconds)]) }
 
     func setLaunchAtLogin(_ value: Bool) throws {
         var command = ["set-launch-at-login", value ? "true" : "false"]
